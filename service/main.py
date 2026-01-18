@@ -10,8 +10,14 @@ Environment variables configured via .env file or system environment.
 import asyncio
 import signal
 import sys
+from pathlib import Path
 from typing import Optional
 import structlog
+
+# Add the service directory to Python path so imports work regardless of where script is run from
+_SERVICE_DIR = Path(__file__).parent.resolve()
+if str(_SERVICE_DIR) not in sys.path:
+    sys.path.insert(0, str(_SERVICE_DIR))
 
 # Import uvloop for better async performance (optional but recommended)
 try:
