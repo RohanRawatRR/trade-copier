@@ -8,11 +8,16 @@ from typing import Literal, Optional
 from pathlib import Path
 
 
+# Find the service directory (where this file is located)
+_SERVICE_DIR = Path(__file__).parent.parent.resolve()
+_ENV_FILE = _SERVICE_DIR / '.env'
+
+
 class Settings(BaseSettings):
     """Production-grade configuration with validation"""
     
     model_config = SettingsConfigDict(
-        env_file='.env',
+        env_file=str(_ENV_FILE) if _ENV_FILE.exists() else None,
         env_file_encoding='utf-8',
         case_sensitive=False,
         extra='ignore'
