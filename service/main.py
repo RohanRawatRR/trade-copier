@@ -19,6 +19,11 @@ _SERVICE_DIR = Path(__file__).parent.resolve()
 if str(_SERVICE_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVICE_DIR))
 
+# Ensure Python recognizes this as a package root
+# This is needed for relative imports in subpackages to work correctly
+import os
+os.chdir(_SERVICE_DIR)
+
 # Import uvloop for better async performance (optional but recommended)
 try:
     import uvloop
@@ -27,7 +32,7 @@ except ImportError:
     pass
 
 from config.settings import settings
-from storage.key_store import KeyStore
+from storage import KeyStore
 from core.websocket_listener import WebSocketListener
 from core.trade_dispatcher import TradeDispatcher
 from core.order_executor import OrderExecutor
