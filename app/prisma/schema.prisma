@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // Change to "sqlite" for SQLite or "postgresql" for PostgreSQL
+  url      = env("DATABASE_URL")
+}
+
+model ClientAccount {
+  account_id            String    @id
+  encrypted_api_key     String
+  encrypted_secret_key  String
+  email                 String?
+  account_name          String?
+  is_active             Boolean
+  circuit_breaker_state String
+  failure_count         Int
+  last_failure_time     DateTime?
+  scaling_method        String?
+  scaling_multiplier    Float?
+  created_at            DateTime
+  updated_at            DateTime  @updatedAt
+  last_successful_trade DateTime?
+
+  @@index([is_active], map: "ix_client_accounts_is_active")
+  @@index([is_active, circuit_breaker_state], map: "idx_active_accounts")
+  @@index([account_id], map: "ix_client_accounts_account_id")
+  @@map("client_accounts")
+}
+
+model TradeAuditLog {
+  id                          Int       @id @default(autoincrement())
+  master_order_id             String
+  client_account_id           String
+  client_order_id             String?
+  symbol                      String
+  side                        String
+  order_type                  String
+  master_qty                  Float
+  master_price                Float?
+  client_qty                  Float?
+  client_filled_qty           Float?
+  client_avg_price            Float?
+  scaling_method_used         String?
+  status                      String
+  error_message               String?
+  retry_count                 Int
+  replication_latency_ms      Int?
+  order_submission_latency_ms Int?
+  master_trade_time           DateTime
+  replication_started_at      DateTime
+  replication_completed_at    DateTime?
+
+  @@index([client_account_id, status], map: "idx_client_trades")
+  @@index([master_order_id], map: "idx_master_order")
+  @@index([client_account_id], map: "ix_trade_audit_logs_client_account_id")
+  @@index([master_order_id], map: "ix_trade_audit_logs_master_order_id")
+  @@index([status], map: "ix_trade_audit_logs_status")
+  @@index([replication_latency_ms, master_trade_time], map: "idx_latency_analysis")
+  @@index([status, replication_started_at], map: "idx_failed_trades")
+  @@index([symbol], map: "ix_trade_audit_logs_symbol")
+  @@index([symbol, master_trade_time], map: "idx_symbol_trades")
+  @@map("trade_audit_logs")
+}
+
+model SystemMetrics {
+  id           Int      @id @default(autoincrement())
+  timestamp    DateTime
+  metric_name  String
+  metric_value Float
+  tags         String?
+
+  @@index([metric_name], map: "ix_system_metrics_metric_name")
+  @@index([timestamp], map: "ix_system_metrics_timestamp")
+  @@index([metric_name, timestamp], map: "idx_metric_time")
+  @@map("system_metrics")
+}
+
+model DeduplicationCache {
+  event_id     String   @id
+  event_type   String
+  processed_at DateTime
+  expires_at   DateTime
+  content_hash String
+
+  @@index([content_hash], map: "ix_deduplication_cache_content_hash")
+  @@index([expires_at], map: "ix_deduplication_cache_expires_at")
+  @@index([expires_at], map: "idx_expiry_cleanup")
+  @@map("deduplication_cache")
+}
