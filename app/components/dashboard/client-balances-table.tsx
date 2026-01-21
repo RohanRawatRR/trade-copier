@@ -151,9 +151,13 @@ export function ClientBalancesTable() {
                     {formatCurrency(balance.buying_power)}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={balance.status === 'success' ? 'default' : 'destructive'}>
-                      {balance.status}
-                    </Badge>
+                    {balance.status ? (
+                      <Badge variant={balance.status === 'success' ? 'default' : 'destructive'}>
+                        {balance.status}
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary">Unknown</Badge>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

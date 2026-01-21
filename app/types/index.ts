@@ -63,6 +63,8 @@ export interface AccountBalance {
   buying_power: number;
   portfolio_value: number;
   last_updated: Date;
+  status?: 'success' | 'error';
+  error?: string;
 }
 
 export interface TradeStats {
