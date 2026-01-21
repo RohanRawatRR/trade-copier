@@ -26,19 +26,19 @@ class MasterAccount(Base):
     __tablename__ = "master_accounts"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(String(50), unique=True, nullable=False, index=True)
+    account_id = Column(String(50), unique=True, nullable=False)
     encrypted_api_key = Column(Text, nullable=False)
     encrypted_secret_key = Column(Text, nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
     
     # Audit fields
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
-    # Indexes
+    # Indexes (explicitly named to avoid conflicts)
+    # Note: account_id doesn't need explicit index - unique=True already creates one
     __table_args__ = (
         Index('ix_master_accounts_is_active', 'is_active'),
-        Index('ix_master_accounts_account_id', 'account_id'),
     )
 
 
