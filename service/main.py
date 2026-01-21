@@ -12,6 +12,7 @@ import signal
 import sys
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 import structlog
 
 # Add the service directory to Python path so imports work regardless of where script is run from
@@ -65,9 +66,11 @@ class TradeCopierApp:
         self.master_account_id: Optional[str] = None
         self.master_api_key: Optional[str] = None
         self.master_secret_key: Optional[str] = None
+        self._master_updated_at: Optional[datetime] = None  # Track last known update timestamp
         
         self.is_running = False
         self._shutdown_event = asyncio.Event()
+        self._credential_check_task: Optional[asyncio.Task] = None
     
     async def initialize(self):
         """Initialize all system components"""
@@ -91,6 +94,12 @@ class TradeCopierApp:
             )
         
         self.master_account_id, self.master_api_key, self.master_secret_key = master_account
+        
+        # Store initial updated_at timestamp for change detection
+        metadata = await self.key_store.get_master_account_metadata()
+        if metadata:
+            self._master_updated_at = metadata[1]
+        
         logger.info("master_account_loaded_from_database", account_id=self.master_account_id)
         
         # Initialize scaling engine
@@ -128,6 +137,151 @@ class TradeCopierApp:
         
         logger.info("trade_copier_initialized_successfully")
     
+    async def _reload_master_credentials(self):
+        """
+        Reload master account credentials and reconnect components.
+        Called when credential changes are detected.
+        """
+        try:
+            logger.info("master_credentials_changed_detected_reloading")
+            
+            # Get new credentials from database
+            master_account = await self.key_store.get_master_account()
+            if not master_account:
+                logger.error("master_account_not_found_during_reload")
+                return
+            
+            new_account_id, new_api_key, new_secret_key = master_account
+            
+            # Get updated timestamp
+            metadata = await self.key_store.get_master_account_metadata()
+            if metadata:
+                new_updated_at = metadata[1]
+            else:
+                logger.error("master_account_metadata_not_found_during_reload")
+                return
+            
+            # Check if account_id changed (shouldn't happen, but be safe)
+            if new_account_id != self.master_account_id:
+                logger.warning(
+                    "master_account_id_changed",
+                    old_account_id=self.master_account_id,
+                    new_account_id=new_account_id
+                )
+            
+            # Update cached credentials
+            self.master_account_id = new_account_id
+            self.master_api_key = new_api_key
+            self.master_secret_key = new_secret_key
+            self._master_updated_at = new_updated_at
+            
+            # Reinitialize ScalingEngine with new credentials
+            if self.scaling_engine:
+                await self.scaling_engine.reinitialize_with_new_credentials(
+                    new_api_key, new_secret_key
+                )
+            
+            # Reconnect WebSocket with new credentials
+            if self.websocket_listener:
+                await self.websocket_listener.reconnect_with_new_credentials(
+                    new_api_key, new_secret_key
+                )
+            
+            logger.info(
+                "master_credentials_reloaded_successfully",
+                account_id=self.master_account_id,
+                updated_at=new_updated_at.isoformat()
+            )
+            
+            # Send alert about credential reload
+            if self.alert_manager:
+                await self.alert_manager.send_alert(
+                    title="Master Credentials Reloaded",
+                    message=f"Master account credentials were updated and reloaded successfully (Account: {self.master_account_id})",
+                    severity="info",
+                    metadata={
+                        "account_id": self.master_account_id,
+                        "updated_at": new_updated_at.isoformat()
+                    }
+                )
+        
+        except Exception as e:
+            logger.error(
+                "error_reloading_master_credentials",
+                error=str(e),
+                exc_info=True
+            )
+            
+            # Send critical alert
+            if self.alert_manager:
+                await self.alert_manager.send_alert(
+                    title="Failed to Reload Master Credentials",
+                    message=f"Error reloading master credentials: {str(e)}. Service may need manual restart.",
+                    severity="error",
+                    metadata={"error": str(e)}
+                )
+    
+    async def _check_master_credentials_loop(self):
+        """
+        Background task that periodically checks for master credential changes.
+        Runs every `settings.master_credential_check_interval` seconds.
+        """
+        logger.info(
+            "master_credential_check_task_started",
+            check_interval_seconds=settings.master_credential_check_interval
+        )
+        
+        while self.is_running:
+            try:
+                await asyncio.sleep(settings.master_credential_check_interval)
+                
+                if not self.is_running:
+                    break
+                
+                # Get current master account metadata
+                metadata = await self.key_store.get_master_account_metadata()
+                if not metadata:
+                    logger.warning("master_account_not_found_in_check_loop")
+                    continue
+                
+                current_account_id, current_updated_at = metadata
+                
+                # Check if credentials have changed
+                if self._master_updated_at is None:
+                    # First check, just store the timestamp
+                    self._master_updated_at = current_updated_at
+                    logger.debug(
+                        "master_credential_check_initialized",
+                        account_id=current_account_id,
+                        updated_at=current_updated_at.isoformat()
+                    )
+                    continue
+                
+                # Compare timestamps (account for timezone differences)
+                if current_updated_at > self._master_updated_at:
+                    logger.info(
+                        "master_credentials_changed_detected",
+                        old_updated_at=self._master_updated_at.isoformat(),
+                        new_updated_at=current_updated_at.isoformat()
+                    )
+                    
+                    # Reload credentials
+                    await self._reload_master_credentials()
+            
+            except asyncio.CancelledError:
+                logger.info("master_credential_check_task_cancelled")
+                break
+            
+            except Exception as e:
+                logger.error(
+                    "error_in_master_credential_check_loop",
+                    error=str(e),
+                    exc_info=True
+                )
+                # Continue checking even if there's an error
+        
+        logger.info("master_credential_check_task_stopped")
+    
     async def start(self):
         """Start the trade copier system"""
         if self.is_running:
@@ -159,6 +313,9 @@ class TradeCopierApp:
         # Start WebSocket listener
         await self.websocket_listener.start()
         
+        # Start background task to check for credential changes
+        self._credential_check_task = asyncio.create_task(self._check_master_credentials_loop())
+        
         logger.info("trade_copier_running")
         
         # Send startup notification
@@ -186,6 +343,15 @@ class TradeCopierApp:
         
         self.is_running = False
         self._shutdown_event.set()
+        
+        # Stop credential check task
+        if self._credential_check_task and not self._credential_check_task.done():
+            self._credential_check_task.cancel()
+            try:
+                await self._credential_check_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("credential_check_task_stopped")
         
         # Stop WebSocket listener first
         if self.websocket_listener:

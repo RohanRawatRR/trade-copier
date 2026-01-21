@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     retry_exponential_base: int = Field(default=2, ge=2, le=10)
     retry_jitter: bool = True
     
+    # Hot Reload Configuration
+    master_credential_check_interval: int = Field(default=30, ge=5, le=300)  # Check every 30 seconds
+    
     @field_validator('latency_critical_threshold')
     @classmethod
     def validate_latency_thresholds(cls, v, info):

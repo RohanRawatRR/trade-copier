@@ -86,6 +86,50 @@ class WebSocketListener:
             paper_trading=settings.use_paper_trading
         )
     
+    async def reconnect_with_new_credentials(self, new_api_key: str, new_secret_key: str):
+        """
+        Reconnect WebSocket with new master account credentials.
+        
+        Args:
+            new_api_key: New master account API key
+            new_secret_key: New master account secret key
+        """
+        logger.info("websocket_reconnecting_with_new_credentials")
+        
+        # Stop current connection
+        was_running = self.is_running
+        if was_running:
+            await self.stop()
+        
+        # Update credentials
+        self.master_api_key = new_api_key
+        self.master_secret_key = new_secret_key
+        
+        # Reinitialize Alpaca clients with new credentials
+        self.trading_client = TradingClient(
+            api_key=self.master_api_key,
+            secret_key=self.master_secret_key,
+            paper=settings.use_paper_trading,
+            url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
+        )
+        
+        self.stream = TradingStream(
+            api_key=self.master_api_key,
+            secret_key=self.master_secret_key,
+            paper=settings.use_paper_trading,
+            url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
+        )
+        
+        # Reset reconnection attempts
+        self.reconnect_attempts = 0
+        
+        logger.info("websocket_clients_reinitialized_with_new_credentials")
+        
+        # Restart if it was running before
+        if was_running:
+            await self.start()
+            logger.info("websocket_restarted_with_new_credentials")
+    
     async def start(self):
         """Start listening to WebSocket stream"""
         if self.is_running:

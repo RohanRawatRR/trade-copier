@@ -53,6 +53,36 @@ class ScalingEngine:
         await self._refresh_master_equity()
         logger.info("scaling_engine_initialized", master_equity=self.master_equity)
     
+    async def reinitialize_with_new_credentials(self, new_api_key: str, new_secret_key: str):
+        """
+        Reinitialize ScalingEngine with new master account credentials.
+        
+        Args:
+            new_api_key: New master account API key
+            new_secret_key: New master account secret key
+        """
+        logger.info("scaling_engine_reinitializing_with_new_credentials")
+        
+        # Update credentials
+        self.master_api_key = new_api_key
+        self.master_secret_key = new_secret_key
+        
+        # Reinitialize client
+        self.master_client = TradingClient(
+            api_key=self.master_api_key,
+            secret_key=self.master_secret_key,
+            paper=settings.use_paper_trading
+        )
+        
+        # Clear cache to force refresh
+        self._cache_timestamp = None
+        self.master_equity = None
+        
+        # Refresh equity with new credentials
+        await self._refresh_master_equity()
+        
+        logger.info("scaling_engine_reinitialized_with_new_credentials", master_equity=self.master_equity)
+    
     async def _refresh_master_equity(self):
         """Refresh cached master account equity"""
         import time

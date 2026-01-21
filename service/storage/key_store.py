@@ -466,6 +466,25 @@ class KeyStore:
             
             return (master.account_id, api_key, secret_key)
     
+    async def get_master_account_metadata(self) -> Optional[Tuple[str, datetime]]:
+        """
+        Get master account metadata (account_id and updated_at timestamp).
+        Used for detecting credential changes without decrypting.
+        
+        Returns:
+            Tuple of (account_id, updated_at) or None if not found
+        """
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(MasterAccount).where(MasterAccount.is_active == True)
+            )
+            master = result.scalar_one_or_none()
+            
+            if not master:
+                return None
+            
+            return (master.account_id, master.updated_at)
+    
     async def update_master_account(
         self,
         account_id: str,
