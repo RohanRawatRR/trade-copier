@@ -64,33 +64,27 @@ export async function GET(request: NextRequest) {
       }));
     } catch (prismaError: any) {
       // If Prisma fails due to datetime conversion issues (common with SQLite),
-      // fall back to raw SQL query
-      if (prismaError.code === 'P2023' || prismaError.message?.includes('Conversion failed')) {
+      // fall back to raw SQL query with datetime cast to text
+      if (prismaError.code === 'P2023' || prismaError.message?.includes('Conversion failed') || prismaError.message?.includes('invalid characters')) {
         console.warn('Prisma datetime conversion error, falling back to raw SQL:', prismaError.message);
         
-        // Build WHERE clause for raw SQL
+        // Build WHERE clause - escape values to prevent SQL injection
         const whereConditions: string[] = [];
-        const params: any[] = [];
-
         if (status) {
-          whereConditions.push(`status = ?`);
-          params.push(status);
+          whereConditions.push(`status = '${status.replace(/'/g, "''")}'`);
         }
         if (clientId) {
-          whereConditions.push(`client_account_id = ?`);
-          params.push(clientId);
+          whereConditions.push(`client_account_id = '${clientId.replace(/'/g, "''")}'`);
         }
         if (symbol) {
-          whereConditions.push(`symbol = ?`);
-          params.push(symbol);
+          whereConditions.push(`symbol = '${symbol.replace(/'/g, "''")}'`);
         }
 
         const whereClause = whereConditions.length > 0 
           ? `WHERE ${whereConditions.join(' AND ')}`
           : '';
 
-        // Use raw SQL query to avoid datetime parsing issues
-        // Prisma will handle parameter substitution based on database type
+        // Cast datetime to text to avoid conversion issues
         const query = `
           SELECT 
             id,
@@ -104,11 +98,11 @@ export async function GET(request: NextRequest) {
             status,
             error_message,
             replication_latency_ms,
-            replication_started_at
+            CAST(replication_started_at AS TEXT) as replication_started_at
           FROM trade_audit_logs
           ${whereClause}
           ORDER BY id DESC
-          LIMIT ? OFFSET ?
+          LIMIT ${limit} OFFSET ${offset}
         `;
 
         const countQuery = `
@@ -117,38 +111,25 @@ export async function GET(request: NextRequest) {
           ${whereClause}
         `;
 
-        const rawTrades = await prisma.$queryRawUnsafe(
-          query,
-          ...params,
-          limit,
-          offset
-        ) as any[];
-
-        const totalResult = await prisma.$queryRawUnsafe(
-          countQuery,
-          ...params
-        ) as any[];
+        const rawTrades = await prisma.$queryRawUnsafe(query) as any[];
+        const totalResult = await prisma.$queryRawUnsafe(countQuery) as any[];
 
         total = Number(totalResult[0]?.count || 0);
 
         // Convert raw results to expected format
         trades = rawTrades.map((trade: any) => ({
-          id: trade.id,
+          id: Number(trade.id),
           master_order_id: trade.master_order_id,
           client_account_id: trade.client_account_id,
           symbol: trade.symbol,
           side: trade.side,
           order_type: trade.order_type,
-          master_qty: trade.master_qty,
-          client_qty: trade.client_qty,
+          master_qty: Number(trade.master_qty),
+          client_qty: trade.client_qty ? Number(trade.client_qty) : null,
           status: trade.status,
           error_message: trade.error_message,
-          replication_latency_ms: trade.replication_latency_ms,
-          replication_started_at: trade.replication_started_at 
-            ? (typeof trade.replication_started_at === 'string' 
-                ? trade.replication_started_at 
-                : new Date(trade.replication_started_at).toISOString())
-            : null,
+          replication_latency_ms: trade.replication_latency_ms ? Number(trade.replication_latency_ms) : null,
+          replication_started_at: trade.replication_started_at || null,
         }));
       } else {
         // Re-throw if it's a different error

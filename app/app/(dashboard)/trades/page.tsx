@@ -2,8 +2,8 @@
 
 // Trades History Page - Full trade audit log
 
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, Fragment } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -23,14 +23,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Home, Search, RefreshCw } from 'lucide-react';
+import { Search, RefreshCw, RotateCcw, Check, X } from 'lucide-react';
 import { TradeAuditLog } from '@/types';
 import { format } from 'date-fns';
+import { AppHeader } from '@/components/dashboard/app-header';
+import { useToast } from '@/components/providers/toast-provider';
 
 export default function TradesPage() {
+  const queryClient = useQueryClient();
+  const { showSuccess, showError } = useToast();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [symbolFilter, setSymbolFilter] = useState<string>('');
   const [limit, setLimit] = useState(100);
+  const [retryingTradeId, setRetryingTradeId] = useState<number | null>(null);
+  const [retryQuantities, setRetryQuantities] = useState<Record<number, string>>({});
 
   // Fetch trades with filters
   const { data, isLoading, refetch } = useQuery({
@@ -49,6 +55,43 @@ export default function TradesPage() {
     refetchInterval: 10000, // Refresh every 10 seconds
   });
 
+  // Retry trade mutation
+  const retryTradeMutation = useMutation({
+    mutationFn: async ({ trade }: { trade: any; qty: number }) => {
+      const response = await fetch('/api/trades/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_account_id: trade.client_account_id,
+          symbol: trade.symbol,
+          side: trade.side,
+          qty: parseFloat(retryQuantities[trade.id] || trade.client_qty?.toString() || trade.master_qty.toString()),
+          order_type: trade.order_type || 'market',
+        }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to execute trade');
+      }
+      return response.json();
+    },
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['trades'] });
+      setRetryingTradeId(null);
+      setRetryQuantities({});
+      showSuccess(
+        `Trade executed successfully for ${variables.trade.symbol}`,
+        'Trade Retry Successful'
+      );
+    },
+    onError: (error: Error) => {
+      showError(
+        error.message || 'Failed to execute trade. Please try again.',
+        'Trade Execution Failed'
+      );
+    },
+  });
+
   const trades: TradeAuditLog[] = data?.data?.trades || [];
   const pagination = data?.data?.pagination || {};
 
@@ -65,27 +108,31 @@ export default function TradesPage() {
     }
   };
 
+  const handleRetryClick = (trade: any) => {
+    setRetryingTradeId(trade.id);
+    setRetryQuantities({
+      ...retryQuantities,
+      [trade.id]: trade.client_qty?.toString() || trade.master_qty.toString(),
+    });
+  };
+
+  const handleCancelRetry = (tradeId: number) => {
+    setRetryingTradeId(null);
+    const newQuantities = { ...retryQuantities };
+    delete newQuantities[tradeId];
+    setRetryQuantities(newQuantities);
+  };
+
+  const handleExecuteRetry = (trade: any) => {
+    retryTradeMutation.mutate({ trade, qty: parseFloat(retryQuantities[trade.id] || '0') });
+  };
+
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold">Trade History</h1>
-              <p className="text-muted-foreground mt-1">
-                Complete audit log of all trade replications
-              </p>
-            </div>
-            <a href="/">
-              <Button variant="outline">
-                <Home className="mr-2 h-4 w-4" />
-                Dashboard
-              </Button>
-            </a>
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        title="Trade History"
+        description="Complete audit log of all trade replications"
+      />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
@@ -148,6 +195,7 @@ export default function TradesPage() {
                       <TableHead>Status</TableHead>
                       <TableHead>Latency</TableHead>
                       <TableHead>Details</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -160,46 +208,120 @@ export default function TradesPage() {
                       const isValidDate = tradeDate && !isNaN(tradeDate.getTime());
                       
                       return (
-                        <TableRow key={trade.id}>
-                          <TableCell className="text-xs">
-                            {isValidDate 
-                              ? format(tradeDate, 'MMM dd, HH:mm:ss')
-                              : trade.replication_started_at || 'N/A'}
-                          </TableCell>
-                          <TableCell className="font-semibold">
-                            {trade.symbol}
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={trade.side === 'buy' ? 'default' : 'destructive'}
-                              className="text-xs"
-                            >
-                              {trade.side.toUpperCase()}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{trade.master_qty}</TableCell>
-                          <TableCell>
-                            {trade.client_qty ? trade.client_qty.toFixed(4) : '-'}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">
-                            {trade.client_account_id}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={getStatusColor(trade.status)}>
-                              {trade.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {trade.replication_latency_ms ? `${trade.replication_latency_ms}ms` : '-'}
-                          </TableCell>
-                          <TableCell>
-                            {trade.error_message && (
-                              <div className="text-xs text-red-500 max-w-xs truncate" title={trade.error_message}>
-                                {trade.error_message}
-                              </div>
-                            )}
-                          </TableCell>
-                        </TableRow>
+                        <Fragment key={trade.id}>
+                          <TableRow>
+                            <TableCell className="text-xs">
+                              {isValidDate 
+                                ? format(tradeDate, 'MMM dd, HH:mm:ss')
+                                : trade.replication_started_at || 'N/A'}
+                            </TableCell>
+                            <TableCell className="font-semibold">
+                              {trade.symbol}
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant={trade.side === 'buy' ? 'default' : 'destructive'}
+                                className="text-xs"
+                              >
+                                {trade.side.toUpperCase()}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{trade.master_qty}</TableCell>
+                            <TableCell>
+                              {trade.client_qty ? trade.client_qty.toFixed(4) : '-'}
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">
+                              {trade.client_account_id}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={getStatusColor(trade.status)}>
+                                {trade.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {trade.replication_latency_ms ? `${trade.replication_latency_ms}ms` : '-'}
+                            </TableCell>
+                            <TableCell>
+                              {trade.error_message && (
+                                <div className="text-xs text-red-500 max-w-xs truncate" title={trade.error_message}>
+                                  {trade.error_message}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {trade.status === 'failed' && (
+                                <>
+                                  {retryingTradeId !== trade.id && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleRetryClick(trade)}
+                                      className="h-8 text-xs"
+                                    >
+                                      <RotateCcw className="h-3 w-3 mr-1" />
+                                      Retry
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                          {retryingTradeId === trade.id && trade.status === 'failed' && (
+                            <TableRow>
+                              <TableCell colSpan={10} className="bg-muted/50 p-4">
+                                <div className="flex items-center gap-4 flex-wrap">
+                                  <div className="text-sm font-medium">Edit Quantity:</div>
+                                  <Input
+                                    type="number"
+                                    step="0.0001"
+                                    value={retryQuantities[trade.id] || ''}
+                                    onChange={(e) =>
+                                      setRetryQuantities({
+                                        ...retryQuantities,
+                                        [trade.id]: e.target.value,
+                                      })
+                                    }
+                                    className="w-32"
+                                    placeholder="Quantity"
+                                  />
+                                  <div className="text-sm text-muted-foreground">
+                                    Symbol: <span className="font-semibold">{trade.symbol}</span> | 
+                                    Side: <span className="font-semibold">{trade.side.toUpperCase()}</span> | 
+                                    Original Qty: <span className="font-semibold">{trade.client_qty || trade.master_qty}</span>
+                                  </div>
+                                  <div className="flex gap-2 ml-auto">
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleExecuteRetry(trade)}
+                                      disabled={retryTradeMutation.isPending || !retryQuantities[trade.id]}
+                                    >
+                                      {retryTradeMutation.isPending ? (
+                                        <>
+                                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                                          Executing...
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Check className="h-4 w-4 mr-2" />
+                                          Execute Trade
+                                        </>
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleCancelRetry(trade.id)}
+                                      disabled={retryTradeMutation.isPending}
+                                    >
+                                      <X className="h-4 w-4 mr-2" />
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </TableBody>

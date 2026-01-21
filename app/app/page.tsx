@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { StatsCard } from '@/components/dashboard/stats-card';
 import { TradeTimeline } from '@/components/dashboard/trade-timeline';
 import { ClientBalancesTable } from '@/components/dashboard/client-balances-table';
+import { AppHeader } from '@/components/dashboard/app-header';
 import { Activity, CheckCircle2, XCircle, Clock, Users } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -36,39 +37,10 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold">Trade Copier Dashboard</h1>
-              <p className="text-muted-foreground mt-1">
-                Real-time monitoring and management for Alpaca trade replication
-          </p>
-        </div>
-            <nav className="flex gap-4">
-              <a
-                href="/clients"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Clients
-              </a>
-              <a
-                href="/trades"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Trades
-          </a>
-          <a
-                href="/settings"
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                Settings
-              </a>
-            </nav>
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        title="Trade Copier Dashboard"
+        description="Real-time monitoring and management for Alpaca trade replication"
+      />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">

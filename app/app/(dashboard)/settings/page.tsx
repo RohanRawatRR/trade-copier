@@ -9,10 +9,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Home, Save, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Save, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AppHeader } from '@/components/dashboard/app-header';
+import { useToast } from '@/components/providers/toast-provider';
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
+  const { showSuccess, showError } = useToast();
   const [formData, setFormData] = useState({
     account_id: '',
     api_key: '',
@@ -53,9 +56,12 @@ export default function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: ['master-account'] });
       setResult({ success: true, message: data.message || 'Master account updated successfully!' });
       setFormData({ account_id: '', api_key: '', secret_key: '' });
+      showSuccess(data.message || 'Master account updated successfully!', 'Success');
     },
     onError: (error: any) => {
-      setResult({ success: false, message: error.message || 'Failed to update master account' });
+      const errorMessage = error.message || 'Failed to update master account';
+      setResult({ success: false, message: errorMessage });
+      showError(errorMessage, 'Error');
     },
   });
 
@@ -71,9 +77,12 @@ export default function SettingsPage() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['master-account'] });
       setResult({ success: true, message: data.message || 'Master account deleted successfully!' });
+      showSuccess(data.message || 'Master account deleted successfully!', 'Success');
     },
     onError: (error: any) => {
-      setResult({ success: false, message: error.message || 'Failed to delete master account' });
+      const errorMessage = error.message || 'Failed to delete master account';
+      setResult({ success: false, message: errorMessage });
+      showError(errorMessage, 'Error');
     },
   });
 
@@ -82,7 +91,9 @@ export default function SettingsPage() {
     setResult(null);
 
     if (!formData.account_id || !formData.api_key || !formData.secret_key) {
-      setResult({ success: false, message: 'All fields are required' });
+      const errorMessage = 'All fields are required';
+      setResult({ success: false, message: errorMessage });
+      showError(errorMessage, 'Validation Error');
       return;
     }
 
@@ -97,25 +108,10 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold">Settings</h1>
-              <p className="text-muted-foreground mt-1">
-                Manage master account configuration
-              </p>
-            </div>
-            <a href="/">
-              <Button variant="outline">
-                <Home className="mr-2 h-4 w-4" />
-                Dashboard
-              </Button>
-            </a>
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        title="Settings"
+        description="Manage master account configuration"
+      />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8 max-w-2xl">

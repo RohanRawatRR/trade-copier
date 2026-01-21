@@ -25,11 +25,14 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Plus, Trash2, Edit, Home } from 'lucide-react';
+import { Plus, Trash2, Edit } from 'lucide-react';
 import { ClientAccount } from '@/types';
+import { AppHeader } from '@/components/dashboard/app-header';
+import { useToast } from '@/components/providers/toast-provider';
 
 export default function ClientsPage() {
   const queryClient = useQueryClient();
+  const { showSuccess, showError } = useToast();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientAccount | null>(null);
   const [formData, setFormData] = useState({
@@ -69,6 +72,10 @@ export default function ClientsPage() {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       setIsAddDialogOpen(false);
       resetForm();
+      showSuccess('Client added successfully!', 'Success');
+    },
+    onError: (error: Error) => {
+      showError(error.message || 'Failed to add client', 'Error');
     },
   });
 
@@ -83,6 +90,10 @@ export default function ClientsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
+      showSuccess('Client deleted successfully!', 'Success');
+    },
+    onError: (error: Error) => {
+      showError(error.message || 'Failed to delete client', 'Error');
     },
   });
 
@@ -101,6 +112,10 @@ export default function ClientsPage() {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       setEditingClient(null);
       resetForm();
+      showSuccess('Client updated successfully!', 'Success');
+    },
+    onError: (error: Error) => {
+      showError(error.message || 'Failed to update client', 'Error');
     },
   });
 
@@ -147,25 +162,10 @@ export default function ClientsPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold">Client Management</h1>
-              <p className="text-muted-foreground mt-1">
-                Manage client accounts and API credentials
-              </p>
-            </div>
-            <a href="/">
-              <Button variant="outline">
-                <Home className="mr-2 h-4 w-4" />
-                Dashboard
-              </Button>
-            </a>
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        title="Client Management"
+        description="Manage client accounts and API credentials"
+      />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
