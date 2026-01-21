@@ -12,7 +12,7 @@ export function decryptApiKey(encryptedData: string): string {
   let key = process.env.ENCRYPTION_KEY;
   
   if (!key) {
-    throw new Error('ENCRYPTION_KEY not found in environment variables. Please set it in .env.local');
+    throw new Error('ENCRYPTION_KEY not found in environment variables. Please set it in .env');
   }
 
   // Trim whitespace and remove quotes if present
