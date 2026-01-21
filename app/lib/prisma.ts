@@ -25,13 +25,35 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  });
+let prismaInstance: PrismaClient;
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+try {
+  prismaInstance =
+    globalForPrisma.prisma ??
+    new PrismaClient({
+      log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    });
 
+  if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prismaInstance;
+
+  // Verify Prisma client is properly initialized by checking for masterAccount model
+  // This ensures the client was generated after schema changes
+  if (!('masterAccount' in prismaInstance)) {
+    throw new Error(
+      'Prisma client is missing the masterAccount model. Please run: npx prisma generate'
+    );
+  }
+} catch (error: any) {
+  console.error('Failed to initialize Prisma client:', error);
+  throw new Error(
+    `Prisma client initialization failed: ${error.message}\n` +
+    'Please ensure:\n' +
+    '1. Prisma client is generated: npx prisma generate\n' +
+    '2. Database schema is synced: npx prisma db push\n' +
+    '3. DATABASE_URL is correctly set in .env file'
+  );
+}
+
+export const prisma = prismaInstance;
 export default prisma;
 

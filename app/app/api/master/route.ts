@@ -54,6 +54,17 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    // Verify Prisma client is available and has masterAccount model
+    if (!prisma) {
+      throw new Error('Prisma client is not initialized');
+    }
+    
+    if (!('masterAccount' in prisma)) {
+      throw new Error(
+        'Prisma client is missing masterAccount model. Please run: npx prisma generate'
+      );
+    }
+
     const body = await request.json();
     let { account_id: providedAccountId, api_key, secret_key } = body;
 
