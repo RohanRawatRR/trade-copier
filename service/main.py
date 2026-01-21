@@ -62,6 +62,9 @@ class TradeCopierApp:
         self.trade_dispatcher: Optional[TradeDispatcher] = None
         self.websocket_listener: Optional[WebSocketListener] = None
         self.alert_manager = None
+        self.master_account_id: Optional[str] = None
+        self.master_api_key: Optional[str] = None
+        self.master_secret_key: Optional[str] = None
         
         self.is_running = False
         self._shutdown_event = asyncio.Event()
@@ -71,8 +74,7 @@ class TradeCopierApp:
         logger.info(
             "trade_copier_initializing",
             version="1.0.0",
-            environment="production" if settings.is_production else "development",
-            master_account=settings.master_account_id
+            environment="production" if settings.is_production else "development"
         )
         
         # Initialize key store and database
@@ -80,8 +82,22 @@ class TradeCopierApp:
         await self.key_store.initialize()
         logger.info("key_store_initialized")
         
+        # Load master account from database
+        master_account = await self.key_store.get_master_account()
+        if not master_account:
+            raise ValueError(
+                "Master account not found in database. "
+                "Please configure master account via the Next.js API (POST /api/master)."
+            )
+        
+        self.master_account_id, self.master_api_key, self.master_secret_key = master_account
+        logger.info("master_account_loaded_from_database", account_id=self.master_account_id)
+        
         # Initialize scaling engine
-        self.scaling_engine = ScalingEngine()
+        self.scaling_engine = ScalingEngine(
+            master_api_key=self.master_api_key,
+            master_secret_key=self.master_secret_key
+        )
         await self.scaling_engine.initialize()
         logger.info("scaling_engine_initialized")
         
@@ -104,7 +120,9 @@ class TradeCopierApp:
         # Initialize WebSocket listener (last, connects to Alpaca)
         self.websocket_listener = WebSocketListener(
             self.key_store,
-            self.trade_dispatcher.dispatch_trade
+            self.trade_dispatcher.dispatch_trade,
+            master_api_key=self.master_api_key,
+            master_secret_key=self.master_secret_key
         )
         logger.info("websocket_listener_initialized")
         
@@ -121,7 +139,7 @@ class TradeCopierApp:
         logger.info("="*80)
         logger.info("TRADE COPIER STARTING")
         logger.info("="*80)
-        logger.info(f"Master Account: {settings.master_account_id}")
+        logger.info(f"Master Account: {self.master_account_id}")
         logger.info(f"Environment: {'PRODUCTION' if settings.is_production else 'PAPER TRADING'}")
         logger.info(f"Max Concurrent Orders: {settings.max_concurrent_orders}")
         logger.info(f"Scaling Method: equity_based (proportional to account balance)")
@@ -150,7 +168,7 @@ class TradeCopierApp:
                 message=f"Trade copier system started successfully in {'PRODUCTION' if settings.is_production else 'PAPER'} mode",
                 severity="info" if not settings.is_production else "warning",
                 metadata={
-                    "master_account": settings.master_account_id,
+                    "master_account": self.master_account_id,
                     "environment": "production" if settings.is_production else "paper",
                     "max_concurrent": settings.max_concurrent_orders
                 }

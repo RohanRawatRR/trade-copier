@@ -32,9 +32,21 @@ export async function GET() {
       clients = [];
     }
 
-    // Fetch master account for comparison
-    // Note: Master account table doesn't exist in introspected schema
-    const masterAccount = null;
+    // Fetch master account from database
+    let masterAccount = null;
+    try {
+      masterAccount = await prisma.masterAccount.findFirst({
+        where: { is_active: true },
+        select: {
+          account_id: true,
+          encrypted_api_key: true,
+          encrypted_secret_key: true,
+        },
+      });
+    } catch (dbError: any) {
+      console.warn('Failed to fetch master account from database:', dbError.message);
+      masterAccount = null;
+    }
 
     // Fetch balances in parallel
     const balancePromises = clients.map(async (client) => {
@@ -87,9 +99,43 @@ export async function GET() {
       }
     });
 
-    // Fetch master balance
-    // Note: Master account is managed by Python service, not in this database
+    // Fetch master balance from database
     let masterBalance = null;
+    if (masterAccount) {
+      try {
+        const masterApiKey = decryptApiKey(masterAccount.encrypted_api_key);
+        const masterSecretKey = decryptApiKey(masterAccount.encrypted_secret_key);
+
+        const masterAlpacaClient = new AlpacaClient({
+          apiKey: masterApiKey,
+          secretKey: masterSecretKey,
+          baseUrl: process.env.ALPACA_BASE_URL,
+        });
+
+        const masterAccountInfo = await masterAlpacaClient.getAccount();
+        masterBalance = {
+          account_id: masterAccount.account_id,
+          equity: parseFloat(masterAccountInfo.equity),
+          cash: parseFloat(masterAccountInfo.cash),
+          buying_power: parseFloat(masterAccountInfo.buying_power),
+          portfolio_value: parseFloat(masterAccountInfo.portfolio_value),
+          last_updated: new Date(),
+          status: 'success',
+        };
+      } catch (error: any) {
+        console.error('Error fetching master account balance:', error);
+        masterBalance = {
+          account_id: masterAccount.account_id,
+          equity: 0,
+          cash: 0,
+          buying_power: 0,
+          portfolio_value: 0,
+          last_updated: new Date(),
+          status: 'error',
+          error: error.message,
+        };
+      }
+    }
 
     const clientBalances = await Promise.all(balancePromises);
 

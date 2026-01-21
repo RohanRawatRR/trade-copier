@@ -35,7 +35,9 @@ class ScalingEngine:
     - If master uses 90% of equity, client uses 90% of equity
     """
     
-    def __init__(self):
+    def __init__(self, master_api_key: str, master_secret_key: str):
+        self.master_api_key = master_api_key
+        self.master_secret_key = master_secret_key
         self.master_client: Optional[TradingClient] = None
         self.master_equity: Optional[float] = None
         self._cache_timestamp: Optional[float] = None
@@ -44,8 +46,8 @@ class ScalingEngine:
     async def initialize(self):
         """Initialize master account client"""
         self.master_client = TradingClient(
-            api_key=settings.master_api_key,
-            secret_key=settings.master_secret_key,
+            api_key=self.master_api_key,
+            secret_key=self.master_secret_key,
             paper=settings.use_paper_trading
         )
         await self._refresh_master_equity()
@@ -367,8 +369,8 @@ class ScalingEngine:
             from alpaca.data.requests import StockLatestQuoteRequest
             
             data_client = StockHistoricalDataClient(
-                api_key=settings.master_api_key,
-                secret_key=settings.master_secret_key
+                api_key=self.master_api_key,
+                secret_key=self.master_secret_key
             )
             
             request = StockLatestQuoteRequest(symbol_or_symbols=symbol)

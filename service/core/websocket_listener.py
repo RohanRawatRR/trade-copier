@@ -41,7 +41,9 @@ class WebSocketListener:
     def __init__(
         self,
         key_store: KeyStore,
-        on_trade_callback: Callable[[Dict[str, Any]], None]
+        on_trade_callback: Callable[[Dict[str, Any]], None],
+        master_api_key: str,
+        master_secret_key: str
     ):
         """
         Initialize WebSocket listener.
@@ -49,21 +51,25 @@ class WebSocketListener:
         Args:
             key_store: KeyStore instance for deduplication
             on_trade_callback: Async callback for processing trade events
+            master_api_key: Master account API key
+            master_secret_key: Master account secret key
         """
         self.key_store = key_store
         self.on_trade_callback = on_trade_callback
+        self.master_api_key = master_api_key
+        self.master_secret_key = master_secret_key
         
         # Initialize Alpaca clients
         self.trading_client = TradingClient(
-            api_key=settings.master_api_key,
-            secret_key=settings.master_secret_key,
+            api_key=self.master_api_key,
+            secret_key=self.master_secret_key,
             paper=settings.use_paper_trading,
             url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
         )
         
         self.stream = TradingStream(
-            api_key=settings.master_api_key,
-            secret_key=settings.master_secret_key,
+            api_key=self.master_api_key,
+            secret_key=self.master_secret_key,
             paper=settings.use_paper_trading,
             url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
         )
@@ -77,7 +83,6 @@ class WebSocketListener:
         
         logger.info(
             "websocket_listener_initialized",
-            master_account=settings.master_account_id,
             paper_trading=settings.use_paper_trading
         )
     

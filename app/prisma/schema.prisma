@@ -3,8 +3,22 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql" // Change to "sqlite" for SQLite or "postgresql" for PostgreSQL
+  provider = "postgresql" // Use "sqlite" for SQLite or "postgresql" for PostgreSQL
   url      = env("DATABASE_URL")
+}
+
+model MasterAccount {
+  id                   Int       @id @default(autoincrement())
+  account_id           String    @unique
+  encrypted_api_key    String
+  encrypted_secret_key String
+  is_active            Boolean   @default(true)
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  @@index([is_active], map: "ix_master_accounts_is_active")
+  @@index([account_id], map: "ix_master_accounts_account_id")
+  @@map("master_accounts")
 }
 
 model ClientAccount {

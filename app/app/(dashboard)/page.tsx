@@ -6,7 +6,6 @@ import { useQuery } from '@tanstack/react-query';
 import { StatsCard } from '@/components/dashboard/stats-card';
 import { TradeTimeline } from '@/components/dashboard/trade-timeline';
 import { ClientBalancesTable } from '@/components/dashboard/client-balances-table';
-import { EmergencyStopButton } from '@/components/dashboard/emergency-stop-button';
 import { Activity, CheckCircle2, XCircle, Clock, Users } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -109,11 +108,6 @@ export default function DashboardPage() {
             description="Total client accounts"
             icon={Users}
           />
-        </div>
-
-        {/* Emergency Controls */}
-        <div className="mb-8">
-          <EmergencyStopButton />
         </div>
 
         {/* Two Column Layout */}

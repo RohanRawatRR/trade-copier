@@ -25,13 +25,27 @@ logger = structlog.get_logger(__name__)
 async def test_master_connection():
     """Test master account connection"""
     print("\n🔍 Testing Master Account Connection...")
-    print(f"   Account ID: {settings.master_account_id}")
-    print(f"   Environment: {'PRODUCTION' if settings.is_production else 'PAPER TRADING'}")
+    
+    # Initialize key store to load master account from database
+    key_store = KeyStore()
+    await key_store.initialize()
     
     try:
+        # Load from database
+        master_account = await key_store.get_master_account()
+        if not master_account:
+            print("   ❌ Master account not found in database")
+            print("   Please configure master account via the Next.js API (POST /api/master)")
+            return False
+        
+        account_id, api_key, secret_key = master_account
+        print(f"   Account ID: {account_id} (from database)")
+        
+        print(f"   Environment: {'PRODUCTION' if settings.is_production else 'PAPER TRADING'}")
+        
         client = TradingClient(
-            api_key=settings.master_api_key,
-            secret_key=settings.master_secret_key,
+            api_key=api_key,
+            secret_key=secret_key,
             paper=settings.use_paper_trading
         )
         
@@ -49,6 +63,9 @@ async def test_master_connection():
         print(f"   ❌ Connection failed: {e}")
         logger.error("master_connection_failed", error=str(e), exc_info=True)
         return False
+    
+    finally:
+        await key_store.close()
 
 
 async def test_client_connections():

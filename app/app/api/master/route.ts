@@ -3,7 +3,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { encryptApiKey } from '@/lib/encryption';
+import { encryptApiKey, decryptApiKey } from '@/lib/encryption';
+import { AlpacaClient } from '@/lib/alpaca';
 
 /**
  * GET /api/master
@@ -54,10 +55,10 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { account_id, api_key, secret_key } = body;
+    let { account_id: providedAccountId, api_key, secret_key } = body;
 
     // Validate required fields
-    if (!account_id || !api_key || !secret_key) {
+    if (!providedAccountId || !api_key || !secret_key) {
       return NextResponse.json(
         {
           success: false,
@@ -71,6 +72,78 @@ export async function POST(request: NextRequest) {
     const encryptedApiKey = encryptApiKey(api_key);
     const encryptedSecretKey = encryptApiKey(secret_key);
 
+    // Verify credentials by testing the connection
+    // Note: We'll attempt verification but allow saving even if it fails
+    // (credentials might be valid but account temporarily unavailable)
+    let accountInfo: any = null;
+    let verificationError: string | null = null;
+    let finalAccountId = providedAccountId;
+    
+    try {
+      const baseUrl = process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets';
+      console.log('Verifying master account credentials:', {
+        baseUrl,
+        accountId: providedAccountId,
+        apiKeyPrefix: api_key.substring(0, 8) + '...',
+      });
+      
+      const alpacaClient = new AlpacaClient({
+        apiKey: api_key,
+        secretKey: secret_key,
+        baseUrl: baseUrl,
+      });
+      
+      accountInfo = await alpacaClient.getAccount();
+      console.log('Master account verification successful:', {
+        accountNumber: accountInfo.account_number,
+        status: accountInfo.status,
+      });
+      
+      // Use the actual account number from Alpaca
+      if (accountInfo.account_number) {
+        if (providedAccountId && accountInfo.account_number !== providedAccountId) {
+          console.warn(`Account ID mismatch: provided=${providedAccountId}, actual=${accountInfo.account_number}`);
+        }
+        finalAccountId = accountInfo.account_number;
+      }
+    } catch (error: any) {
+      console.error('Master account credential verification failed:', {
+        error: error.message,
+        baseUrl: process.env.ALPACA_BASE_URL,
+        providedAccountId,
+      });
+      
+      verificationError = error.message;
+      
+      // For "Not Found" errors, we'll still allow saving but warn the user
+      // This could be due to:
+      // 1. Wrong base URL (paper vs live)
+      // 2. Account temporarily unavailable
+      // 3. API keys for a different environment
+      
+      if (!error.message?.includes('Not Found')) {
+        // For other errors (Unauthorized, Forbidden), we should fail
+        let errorTitle = 'Invalid API credentials';
+        if (error.message?.includes('Unauthorized')) {
+          errorTitle = 'Invalid API credentials';
+        } else if (error.message?.includes('Forbidden')) {
+          errorTitle = 'API key permission denied';
+        }
+        
+        return NextResponse.json(
+          {
+            success: false,
+            error: errorTitle,
+            message: error.message || 'Failed to verify credentials',
+          },
+          { status: 400 }
+        );
+      }
+      
+      // For "Not Found", we'll continue but add a warning
+      console.warn('Continuing with master account save despite verification failure (Not Found). User should verify credentials manually.');
+    }
+
     // Check if master account exists
     const existingMaster = await prisma.masterAccount.findFirst({
       where: { is_active: true },
@@ -79,35 +152,50 @@ export async function POST(request: NextRequest) {
     let masterAccount;
 
     if (existingMaster) {
-      // Deactivate old master
-      await prisma.masterAccount.update({
+      // Update existing master account
+      masterAccount = await prisma.masterAccount.update({
         where: { id: existingMaster.id },
-        data: { is_active: false },
+        data: {
+          account_id: finalAccountId,
+          encrypted_api_key: encryptedApiKey,
+          encrypted_secret_key: encryptedSecretKey,
+          is_active: true,
+        },
+        select: {
+          id: true,
+          account_id: true,
+          is_active: true,
+          created_at: true,
+          updated_at: true,
+        },
+      });
+    } else {
+      // Create new master account
+      masterAccount = await prisma.masterAccount.create({
+        data: {
+          account_id: finalAccountId,
+          encrypted_api_key: encryptedApiKey,
+          encrypted_secret_key: encryptedSecretKey,
+          is_active: true,
+        },
+        select: {
+          id: true,
+          account_id: true,
+          is_active: true,
+          created_at: true,
+          updated_at: true,
+        },
       });
     }
-
-    // Create new master account
-    masterAccount = await prisma.masterAccount.create({
-      data: {
-        account_id,
-        api_key: encryptedApiKey,
-        secret_key: encryptedSecretKey,
-        is_active: true,
-      },
-      select: {
-        id: true,
-        account_id: true,
-        is_active: true,
-        created_at: true,
-        updated_at: true,
-      },
-    });
 
     return NextResponse.json({
       success: true,
       data: masterAccount,
-      message: 'Master account updated successfully',
-    }, { status: 201 });
+      message: verificationError 
+        ? `Master account saved successfully, but verification failed: ${verificationError}. Please verify your credentials and base URL are correct.`
+        : 'Master account updated successfully',
+      warning: verificationError ? 'Credentials saved but could not be verified. Please check your API keys and base URL.' : undefined,
+    }, { status: existingMaster ? 200 : 201 });
   } catch (error: any) {
     console.error('Error updating master account:', error);
     return NextResponse.json(
@@ -160,4 +248,3 @@ export async function DELETE() {
     );
   }
 }
-

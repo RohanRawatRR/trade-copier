@@ -14,6 +14,34 @@ class Base(AsyncAttrs, DeclarativeBase):
     pass
 
 
+class MasterAccount(Base):
+    """
+    Stores encrypted master account credentials.
+    
+    Security considerations:
+    - API keys are encrypted at rest using Fernet symmetric encryption
+    - Keys are only decrypted in memory when needed
+    - No plaintext keys ever touch disk
+    """
+    __tablename__ = "master_accounts"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String(50), unique=True, nullable=False, index=True)
+    encrypted_api_key = Column(Text, nullable=False)
+    encrypted_secret_key = Column(Text, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    
+    # Audit fields
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    # Indexes
+    __table_args__ = (
+        Index('ix_master_accounts_is_active', 'is_active'),
+        Index('ix_master_accounts_account_id', 'account_id'),
+    )
+
+
 class ClientAccount(Base):
     """
     Stores encrypted client account credentials.

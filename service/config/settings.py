@@ -23,11 +23,6 @@ class Settings(BaseSettings):
         extra='ignore'
     )
     
-    # Master Account
-    master_api_key: str
-    master_secret_key: str
-    master_account_id: str
-    
     # Database
     database_url: str = "sqlite+aiosqlite:///./trade_copier.db"
     

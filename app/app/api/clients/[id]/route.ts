@@ -11,10 +11,11 @@ import { encryptApiKey } from '@/lib/encryption';
  */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const account_id = params.id; // Use account_id directly (string)
+    const { id } = await params;
+    const account_id = id; // Use account_id directly (string)
     const body = await request.json();
     const { account_name, email, api_key, secret_key, is_active } = body;
 
@@ -82,10 +83,11 @@ export async function PATCH(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const account_id = params.id; // Use account_id directly (string)
+    const { id } = await params;
+    const account_id = id; // Use account_id directly (string)
 
     // Check if client exists
     const existingClient = await prisma.clientAccount.findUnique({
