@@ -33,19 +33,20 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const showToast = useCallback((message: Omit<ToastMessage, 'id'>) => {
     const id = Math.random().toString(36).substring(2, 9);
+    const duration = message.duration ?? 5000;
     const newToast: ToastMessage = {
       ...message,
       id,
-      duration: message.duration || 5000,
+      duration,
     };
 
     setToasts((prev) => [...prev, newToast]);
 
     // Auto remove after duration
-    if (newToast.duration > 0) {
+    if (duration > 0) {
       setTimeout(() => {
         removeToast(id);
-      }, newToast.duration);
+      }, duration);
     }
   }, [removeToast]);
 
