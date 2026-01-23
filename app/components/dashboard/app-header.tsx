@@ -15,6 +15,7 @@ export function AppHeader({ title, description }: AppHeaderProps) {
     { href: '/', label: 'Dashboard' },
     { href: '/clients', label: 'Clients' },
     { href: '/trades', label: 'Trades' },
+    { href: '/analytics', label: 'Analytics' },
     { href: '/settings', label: 'Settings' },
   ];
 

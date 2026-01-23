@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { StatsCard } from '@/components/dashboard/stats-card';
 import { TradeTimeline } from '@/components/dashboard/trade-timeline';
 import { ClientBalancesTable } from '@/components/dashboard/client-balances-table';
+import { EquityGrowthChart } from '@/components/dashboard/equity-growth-chart';
 import { AppHeader } from '@/components/dashboard/app-header';
 import { Activity, CheckCircle2, XCircle, Clock, Users } from 'lucide-react';
 

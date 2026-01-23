@@ -23,11 +23,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Search, RefreshCw, RotateCcw, Check, X } from 'lucide-react';
+import { Search, RefreshCw, RotateCcw, Check, X, XCircle } from 'lucide-react';
 import { TradeAuditLog } from '@/types';
 import { format } from 'date-fns';
 import { AppHeader } from '@/components/dashboard/app-header';
 import { useToast } from '@/components/providers/toast-provider';
+import { TradeDetailDialog } from '@/components/dashboard/trade-detail-dialog';
 
 export default function TradesPage() {
   const queryClient = useQueryClient();
@@ -37,6 +38,9 @@ export default function TradesPage() {
   const [limit, setLimit] = useState(100);
   const [retryingTradeId, setRetryingTradeId] = useState<number | null>(null);
   const [retryQuantities, setRetryQuantities] = useState<Record<number, string>>({});
+  const [selectedTrade, setSelectedTrade] = useState<any | null>(null);
+  const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
+  const [isClosingAll, setIsClosingAll] = useState(false);
 
   // Fetch trades with filters
   const { data, isLoading, refetch } = useQuery({
@@ -123,8 +127,77 @@ export default function TradesPage() {
     setRetryQuantities(newQuantities);
   };
 
+  // Close all positions mutation
+  const closeAllMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/trades/close-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || error.message || 'Failed to close all positions');
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setIsClosingAll(false);
+      queryClient.invalidateQueries({ queryKey: ['trades'] });
+      queryClient.invalidateQueries({ queryKey: ['account-balances'] });
+      showSuccess(
+        data.message || `Successfully closed ${data.data?.closed || 0} position(s)`,
+        'Close All Positions'
+      );
+    },
+    onError: (error: Error) => {
+      setIsClosingAll(false);
+      showError(
+        error.message || 'Failed to close all positions. Please try again.',
+        'Close All Failed'
+      );
+    },
+  });
+
+  const handleCloseAll = async () => {
+    if (!confirm('Are you sure you want to close all open positions for all client accounts? This action cannot be undone.')) {
+      return;
+    }
+    setIsClosingAll(true);
+    closeAllMutation.mutate();
+  };
+
   const handleExecuteRetry = (trade: any) => {
     retryTradeMutation.mutate({ trade, qty: parseFloat(retryQuantities[trade.id] || '0') });
+  };
+
+  const calculatePNL = (trade: any): number | null => {
+    // Calculate PNL based on price difference between master and client
+    // PNL = (master_price - client_avg_price) * client_qty
+    // Positive PNL means client got a better price (paid less for buy, received more for sell)
+    // Negative PNL means client got a worse price
+    
+    if (!trade.client_avg_price || !trade.master_price || !trade.client_qty) {
+      return null;
+    }
+
+    const priceDiff = trade.master_price - trade.client_avg_price;
+    const pnl = priceDiff * trade.client_qty;
+    
+    // For SELL orders, flip the sign (selling at higher price is better)
+    if (trade.side.toLowerCase() === 'sell') {
+      return -pnl;
+    }
+    
+    return pnl;
+  };
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
   };
 
   return (
@@ -143,6 +216,26 @@ export default function TradesPage() {
                 All Trades ({pagination.total || 0})
               </CardTitle>
               <div className="flex gap-2 items-center w-full md:w-auto">
+                {/* Close All Button */}
+                <Button
+                  variant="destructive"
+                  onClick={handleCloseAll}
+                  disabled={closeAllMutation.isPending || isClosingAll}
+                  className="gap-2"
+                >
+                  {closeAllMutation.isPending || isClosingAll ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      Closing...
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="h-4 w-4" />
+                      Close All Positions
+                    </>
+                  )}
+                </Button>
+
                 {/* Status Filter */}
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
                   <SelectTrigger className="w-[140px]">
@@ -191,6 +284,8 @@ export default function TradesPage() {
                       <TableHead>Side</TableHead>
                       <TableHead>Master Qty</TableHead>
                       <TableHead>Client Qty</TableHead>
+                      <TableHead>Price</TableHead>
+                      <TableHead>PNL</TableHead>
                       <TableHead>Client ID</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Latency</TableHead>
@@ -209,44 +304,89 @@ export default function TradesPage() {
                       
                       return (
                         <Fragment key={trade.id}>
-                          <TableRow>
+                          <TableRow 
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={(e) => {
+                              // Don't open dialog if clicking on buttons or inputs
+                              const target = e.target as HTMLElement;
+                              if (target.closest('button') || target.closest('input')) {
+                                return;
+                              }
+                              setSelectedTrade(trade);
+                              setIsDetailDialogOpen(true);
+                            }}
+                          >
+                          <TableCell className="text-xs">
+                            {isValidDate 
+                              ? format(tradeDate, 'MMM dd, HH:mm:ss')
+                              : trade.replication_started_at || 'N/A'}
+                          </TableCell>
+                          <TableCell className="font-semibold">
+                            {trade.symbol}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={trade.side === 'buy' ? 'default' : 'destructive'}
+                              className="text-xs"
+                            >
+                              {trade.side.toUpperCase()}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{trade.master_qty}</TableCell>
+                          <TableCell>
+                            {trade.client_qty ? trade.client_qty.toFixed(4) : '-'}
+                          </TableCell>
                             <TableCell className="text-xs">
-                              {isValidDate 
-                                ? format(tradeDate, 'MMM dd, HH:mm:ss')
-                                : trade.replication_started_at || 'N/A'}
-                            </TableCell>
-                            <TableCell className="font-semibold">
-                              {trade.symbol}
-                            </TableCell>
-                            <TableCell>
-                              <Badge
-                                variant={trade.side === 'buy' ? 'default' : 'destructive'}
-                                className="text-xs"
-                              >
-                                {trade.side.toUpperCase()}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>{trade.master_qty}</TableCell>
-                            <TableCell>
-                              {trade.client_qty ? trade.client_qty.toFixed(4) : '-'}
-                            </TableCell>
-                            <TableCell className="font-mono text-xs">
-                              {trade.client_account_id}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={getStatusColor(trade.status)}>
-                                {trade.status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              {trade.replication_latency_ms ? `${trade.replication_latency_ms}ms` : '-'}
-                            </TableCell>
-                            <TableCell>
-                              {trade.error_message && (
-                                <div className="text-xs text-red-500 max-w-xs truncate" title={trade.error_message}>
-                                  {trade.error_message}
+                              {trade.client_avg_price ? (
+                                <div>
+                                  <div className="font-semibold">${trade.client_avg_price.toFixed(2)}</div>
+                                  {trade.master_price && (
+                                    <div className="text-muted-foreground text-xs">
+                                      Master: ${trade.master_price.toFixed(2)}
+                                    </div>
+                                  )}
                                 </div>
+                              ) : trade.master_price ? (
+                                <div className="text-muted-foreground">${trade.master_price.toFixed(2)}</div>
+                              ) : (
+                                '-'
                               )}
+                            </TableCell>
+                            <TableCell>
+                              {(() => {
+                                const pnl = calculatePNL(trade);
+                                if (pnl === null) {
+                                  return <span className="text-muted-foreground">-</span>;
+                                }
+                                const isPositive = pnl >= 0;
+                                return (
+                                  <span
+                                    className={`font-semibold ${
+                                      isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                                    }`}
+                                  >
+                                    {isPositive ? '+' : ''}{formatCurrency(pnl)}
+                                  </span>
+                                );
+                              })()}
+                            </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {trade.client_account_id}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={getStatusColor(trade.status)}>
+                              {trade.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {trade.replication_latency_ms ? `${trade.replication_latency_ms}ms` : '-'}
+                          </TableCell>
+                          <TableCell>
+                            {trade.error_message && (
+                              <div className="text-xs text-red-500 max-w-xs truncate" title={trade.error_message}>
+                                {trade.error_message}
+                              </div>
+                            )}
                             </TableCell>
                             <TableCell>
                               {trade.status === 'failed' && (
@@ -318,8 +458,8 @@ export default function TradesPage() {
                                     </Button>
                                   </div>
                                 </div>
-                              </TableCell>
-                            </TableRow>
+                          </TableCell>
+                        </TableRow>
                           )}
                         </Fragment>
                       );
@@ -337,6 +477,15 @@ export default function TradesPage() {
           </CardContent>
         </Card>
       </main>
+
+      {/* Trade Detail Dialog */}
+      {selectedTrade && (
+        <TradeDetailDialog
+          trade={selectedTrade}
+          open={isDetailDialogOpen}
+          onOpenChange={setIsDetailDialogOpen}
+        />
+      )}
     </div>
   );
 }

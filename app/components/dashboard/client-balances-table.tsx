@@ -152,9 +152,9 @@ export function ClientBalancesTable() {
                   </TableCell>
                   <TableCell>
                     {balance.status ? (
-                      <Badge variant={balance.status === 'success' ? 'default' : 'destructive'}>
-                        {balance.status}
-                      </Badge>
+                    <Badge variant={balance.status === 'success' ? 'default' : 'destructive'}>
+                      {balance.status}
+                    </Badge>
                     ) : (
                       <Badge variant="secondary">Unknown</Badge>
                     )}
