@@ -198,8 +198,8 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
               )}
             </div>
 
-            {/* Middle Row: PNL (left) and Percentage (right) - Only show if PNL can be calculated */}
-            {pnl !== null && (
+            {/* Middle Row: PNL (left) and Percentage (right) - Only show for sell trades when PNL can be calculated */}
+            {!isBuy && pnl !== null && (
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2.5">
                   <div className={`p-1.5 rounded-lg ${isPositive ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
@@ -221,67 +221,69 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
               </div>
             )}
 
-            {/* Bottom Section: Entry and Exit - Always show in separate rows */}
-            <div className="space-y-4 pt-4 border-t border-border/40">
-              {/* Entry Row */}
-              <div className="flex items-start justify-between">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Entry</div>
-                <div className="flex flex-col text-right">
-                  {(() => {
-                    // Use Alpaca data if available (most accurate), otherwise fallback to trade data
-                    const entryPrice = alpacaDetails?.entryPrice ?? trade.client_avg_price;
-                    const filledQty = alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
-                    
-                    return entryPrice ? (
-                      <>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
-                          {formatCurrency(entryPrice)}
-                        </div>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                          × {(filledQty ?? '-').toString()}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">-</div>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                          × {(filledQty ?? '-').toString()}
-                        </div>
-                      </>
-                    );
-                  })()}
+            {/* Bottom Section: Entry and Exit - Only show for sell trades */}
+            {!isBuy && (
+              <div className="space-y-4 pt-4 border-t border-border/40">
+                {/* Entry Row */}
+                <div className="flex items-start justify-between">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Entry</div>
+                  <div className="flex flex-col text-right">
+                    {(() => {
+                      // Use Alpaca data if available (most accurate), otherwise fallback to trade data
+                      const entryPrice = alpacaDetails?.entryPrice ?? trade.client_avg_price;
+                      const filledQty = alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
+                      
+                      return entryPrice ? (
+                        <>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
+                            {formatCurrency(entryPrice)}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
+                            × {(filledQty ?? '-').toString()}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">-</div>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
+                            × {(filledQty ?? '-').toString()}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+                
+                {/* Exit Row */}
+                <div className="flex items-start justify-between">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Exit</div>
+                  <div className="flex flex-col text-right">
+                    {(() => {
+                      // Use Alpaca data if available (most accurate), otherwise fallback to trade data
+                      const exitPrice = alpacaDetails?.exitPrice ?? trade.master_price;
+                      
+                      return exitPrice ? (
+                        <>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
+                            {formatCurrency(exitPrice)}
+                          </div>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
+                            × {(trade.master_qty ?? '-').toString()}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">-</div>
+                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
+                            × {(trade.master_qty ?? '-').toString()}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
-              
-              {/* Exit Row */}
-              <div className="flex items-start justify-between">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Exit</div>
-                <div className="flex flex-col text-right">
-                  {(() => {
-                    // Use Alpaca data if available (most accurate), otherwise fallback to trade data
-                    const exitPrice = alpacaDetails?.exitPrice ?? trade.master_price;
-                    
-                    return exitPrice ? (
-                      <>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
-                          {formatCurrency(exitPrice)}
-                        </div>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                          × {(trade.master_qty ?? '-').toString()}
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">-</div>
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                          × {(trade.master_qty ?? '-').toString()}
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Trade Details Grid */}
