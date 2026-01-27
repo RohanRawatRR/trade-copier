@@ -337,6 +337,13 @@ class WebSocketListener:
                         message="Exception caught in websocket stream - stream recreated, applying backoff"
                     )
                     
+                    # Check if this is a timeout (SDK retrying internally)
+                    is_timeout = (
+                        error_type == "TimeoutError" or
+                        "timeout" in error_str.lower() or
+                        "timed out" in error_str.lower()
+                    )
+                    
                     # Check if this is an authentication error
                     is_auth_error = (
                         "failed to authenticate" in error_str.lower() or
@@ -355,7 +362,26 @@ class WebSocketListener:
                         ("server rejected" in error_str.lower() and "429" in error_str)
                     )
                     
-                    if is_auth_error:
+                    if is_timeout:
+                        # Timeout means SDK was retrying internally - use extended backoff
+                        logger.warning(
+                            "websocket_timeout_detected",
+                            error=error_str,
+                            error_type=error_type,
+                            reconnect_attempts=self.reconnect_attempts,
+                            message="Connection timeout detected - SDK likely retrying internally - using extended backoff",
+                            next_delay_seconds=60 * (2 ** (self.reconnect_attempts)),
+                            action="Applying extended backoff"
+                        )
+                        self._rate_limited = True
+                        
+                        if not self.is_running:
+                            break
+                        
+                        # Use extended backoff for timeouts (same as rate limits)
+                        await self._handle_reconnection(is_rate_limit=True)
+                    
+                    elif is_auth_error:
                         # Authentication errors are critical - log and alert but still retry with longer delay
                         logger.critical(
                             "websocket_authentication_failed",
