@@ -224,10 +224,42 @@ class WebSocketListener:
                     connection_start = time.time()
                     logger.info("websocket_connecting", attempt=self.reconnect_attempts + 1)
                     
-                    # Run stream (blocks until disconnected)
-                    # Wrap in try-except to catch any exceptions from SDK
+                    # Wrap _run_forever() with a short timeout to detect SDK internal retries
+                    # If SDK is retrying internally, it will fail quickly (< 3 seconds)
+                    # Normal connections either succeed (no timeout) or fail immediately
                     try:
-                        await self.stream._run_forever()
+                        # Use 3-second timeout - if SDK retries internally, it will fail quickly
+                        await asyncio.wait_for(
+                            self.stream._run_forever(),
+                            timeout=3.0
+                        )
+                    except asyncio.TimeoutError:
+                        # Timeout after 3 seconds - check if we're connected
+                        connection_duration = time.time() - connection_start
+                        if not self.is_connected:
+                            # Not connected after 3 seconds - SDK was likely retrying internally
+                            logger.warning(
+                                "websocket_timeout_not_connected",
+                                duration_seconds=connection_duration,
+                                message="Connection attempt timed out without connecting - SDK likely retrying internally",
+                                action="Stopping stream and applying extended backoff"
+                            )
+                            try:
+                                await self.stream.stop_ws()
+                            except Exception:
+                                pass
+                            # Recreate stream
+                            self.stream = TradingStream(
+                                api_key=self.master_api_key,
+                                secret_key=self.master_secret_key,
+                                paper=settings.use_paper_trading
+                            )
+                            self.stream.subscribe_trade_updates(self._handle_trade_update)
+                            # Mark as rate limited and trigger extended backoff
+                            self._rate_limited = True
+                            raise TimeoutError("WebSocket connection timed out - SDK internal retries detected")
+                        # If connected, timeout is normal (stream is running) - continue
+                        continue
                     except Exception as stream_error:
                         # Check if connection failed very quickly (< 2 seconds)
                         # This indicates SDK was retrying internally
