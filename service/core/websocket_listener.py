@@ -60,6 +60,7 @@ class WebSocketListener:
         self.master_secret_key = master_secret_key
         
         # Initialize Alpaca clients
+        # TradingClient uses REST API (HTTP), so we can override with ALPACA_BASE_URL
         self.trading_client = TradingClient(
             api_key=self.master_api_key,
             secret_key=self.master_secret_key,
@@ -67,11 +68,12 @@ class WebSocketListener:
             url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
         )
         
+        # TradingStream uses WebSocket (WSS), so we let it auto-detect based on paper parameter
+        # Don't override URL here - the SDK will use the correct WebSocket URL automatically
         self.stream = TradingStream(
             api_key=self.master_api_key,
             secret_key=self.master_secret_key,
-            paper=settings.use_paper_trading,
-            url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
+            paper=settings.use_paper_trading
         )
         
         # State tracking
@@ -113,11 +115,11 @@ class WebSocketListener:
             url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
         )
         
+        # TradingStream uses WebSocket (WSS), so we let it auto-detect based on paper parameter
         self.stream = TradingStream(
             api_key=self.master_api_key,
             secret_key=self.master_secret_key,
-            paper=settings.use_paper_trading,
-            url_override=settings.alpaca_base_url if not settings.use_paper_trading else None
+            paper=settings.use_paper_trading
         )
         
         # Reset reconnection attempts
