@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Save, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Save, AlertTriangle, CheckCircle2, RefreshCw, XCircle, Loader2 } from 'lucide-react';
 import { AppHeader } from '@/components/dashboard/app-header';
 import { useToast } from '@/components/providers/toast-provider';
 
@@ -34,6 +34,21 @@ export default function SettingsPage() {
       }
       return response.json();
     },
+  });
+
+  // Fetch service status
+  const { data: serviceStatus, isLoading: isStatusLoading, refetch: refetchStatus, error: statusError } = useQuery({
+    queryKey: ['service-status'],
+    queryFn: async () => {
+      const response = await fetch('/api/service/restart');
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to fetch service status');
+      }
+      return response.json();
+    },
+    refetchInterval: 10000, // Auto-refresh every 10 seconds
+    retry: false, // Don't retry on error (e.g., if SSH not configured)
   });
 
   const masterAccount = masterData?.data;
@@ -81,6 +96,31 @@ export default function SettingsPage() {
     },
     onError: (error: any) => {
       const errorMessage = error.message || 'Failed to delete master account';
+      setResult({ success: false, message: errorMessage });
+      showError(errorMessage, 'Error');
+    },
+  });
+
+  // Restart service mutation
+  const restartServiceMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/service/restart', {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to restart service');
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setResult({ success: true, message: data.message || 'Service restarted successfully!' });
+      showSuccess(data.message || 'Service restarted successfully!', 'Success');
+      // Refresh service status after restart
+      refetchStatus();
+    },
+    onError: (error: any) => {
+      const errorMessage = error.message || 'Failed to restart service';
       setResult({ success: false, message: errorMessage });
       showError(errorMessage, 'Error');
     },
@@ -144,10 +184,55 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <div>
+                  <div className="text-sm text-muted-foreground">Service Status</div>
+                  <div className="flex items-center gap-2">
+                    {isStatusLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        <span className="text-muted-foreground">Checking...</span>
+                      </>
+                    ) : statusError ? (
+                      <>
+                        <AlertTriangle className="h-4 w-4 text-yellow-500" />
+                        <span className="font-semibold text-yellow-600">Unavailable</span>
+                      </>
+                    ) : serviceStatus?.status === 'active' ? (
+                      <>
+                        <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        <span className="font-semibold text-green-600">Running</span>
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="h-4 w-4 text-red-500" />
+                        <span className="font-semibold text-red-600">
+                          {serviceStatus?.status === 'inactive' ? 'Stopped' : 'Unknown'}
+                        </span>
+                      </>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => refetchStatus()}
+                      disabled={isStatusLoading}
+                      className="ml-auto h-6 px-2"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${isStatusLoading ? 'animate-spin' : ''}`} />
+                    </Button>
+                  </div>
+                </div>
+                <div>
                   <div className="text-sm text-muted-foreground">Created</div>
                   <div>{new Date(masterAccount.created_at).toLocaleString()}</div>
                 </div>
-                <div className="pt-4">
+                <div className="pt-4 flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => restartServiceMutation.mutate()}
+                    disabled={restartServiceMutation.isPending}
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${restartServiceMutation.isPending ? 'animate-spin' : ''}`} />
+                    {restartServiceMutation.isPending ? 'Restarting...' : 'Restart Service'}
+                  </Button>
                   <Button
                     variant="destructive"
                     onClick={handleDelete}
@@ -245,14 +330,82 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* Important Note */}
-        <Alert className="mt-8">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertDescription>
-            <strong>Important:</strong> After updating the master account, you must restart the
-            Python trade copier service for changes to take effect.
-          </AlertDescription>
-        </Alert>
+        {/* Service Management */}
+        <Card className="mt-8">
+          <CardHeader>
+            <CardTitle>Service Management</CardTitle>
+            <CardDescription>
+              Monitor and manage the trade copier service status
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {/* Service Status Display */}
+              <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
+                <div className="flex items-center gap-3">
+                  <div>
+                    <div className="text-sm text-muted-foreground">Service Status</div>
+                    <div className="flex items-center gap-2 mt-1">
+                      {isStatusLoading ? (
+                        <>
+                          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                          <span className="font-semibold text-muted-foreground">Checking...</span>
+                        </>
+                      ) : statusError ? (
+                        <>
+                          <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                          <span className="font-semibold text-yellow-600">Unavailable</span>
+                          <span className="text-xs text-muted-foreground ml-2">
+                            ({statusError instanceof Error ? statusError.message : 'Check SSH config'})
+                          </span>
+                        </>
+                      ) : serviceStatus?.status === 'active' ? (
+                        <>
+                          <CheckCircle2 className="h-5 w-5 text-green-500" />
+                          <span className="font-semibold text-green-600">Running</span>
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-5 w-5 text-red-500" />
+                          <span className="font-semibold text-red-600">
+                            {serviceStatus?.status === 'inactive' ? 'Stopped' : 'Unknown'}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => refetchStatus()}
+                  disabled={isStatusLoading}
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${isStatusLoading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </Button>
+              </div>
+
+              <Alert>
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>Important:</strong> After updating the master account credentials, you must restart the
+                  Python trade copier service for changes to take effect.
+                </AlertDescription>
+              </Alert>
+              
+              <Button
+                variant="outline"
+                onClick={() => restartServiceMutation.mutate()}
+                disabled={restartServiceMutation.isPending}
+                className="w-full"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${restartServiceMutation.isPending ? 'animate-spin' : ''}`} />
+                {restartServiceMutation.isPending ? 'Restarting Service...' : 'Restart Trade Copier Service'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </main>
     </div>
   );

@@ -310,8 +310,23 @@ class TradeCopierApp:
                 logger.info("Startup aborted by user")
                 return
         
-        # Start WebSocket listener
-        await self.websocket_listener.start()
+        # Start WebSocket listener (connects to Alpaca)
+        # This will raise RuntimeError if initial connection fails (auth errors)
+        try:
+            await self.websocket_listener.start()
+            logger.info("websocket_listener_started")
+        except RuntimeError as e:
+            # Initial connection failed - stop the service
+            logger.critical(
+                "websocket_initial_connection_failed_stopping_service",
+                error=str(e),
+                message="Stopping service due to initial connection failure. Please update master credentials and restart."
+            )
+            await self.shutdown()
+            raise RuntimeError(
+                f"Service stopped due to WebSocket connection failure: {e}. "
+                "Please update master account credentials via the app and restart using: sudo systemctl restart trade-copier"
+            )
         
         # Start background task to check for credential changes
         self._credential_check_task = asyncio.create_task(self._check_master_credentials_loop())

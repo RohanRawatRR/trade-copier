@@ -87,6 +87,9 @@ class WebSocketListener:
         self._connection_lock = asyncio.Lock()  # Prevent concurrent connection attempts
         self._last_connection_attempt: Optional[float] = None  # Track last connection attempt time
         self._rapid_failure_count = 0  # Track rapid consecutive failures
+        self._is_initial_connection = True  # Track if this is the first connection attempt
+        self._initial_connection_error: Optional[Exception] = None  # Store initial connection error
+        self._initial_connection_event = asyncio.Event()  # Signal when initial connection attempt completes
         
         logger.info(
             "websocket_listener_initialized",
@@ -144,12 +147,32 @@ class WebSocketListener:
             return
         
         self.is_running = True
+        self._initial_connection_error = None
+        self._initial_connection_event.clear()
         
         # Subscribe to trade updates
         self.stream.subscribe_trade_updates(self._handle_trade_update)
         
         # Start stream in background task
         self._stream_task = asyncio.create_task(self._run_stream())
+        
+        # Wait for initial connection attempt (with timeout)
+        try:
+            await asyncio.wait_for(self._initial_connection_event.wait(), timeout=10.0)
+        except asyncio.TimeoutError:
+            # If timeout, check if we're connected
+            if not self.is_connected:
+                logger.warning("websocket_initial_connection_timeout", message="Initial connection attempt timed out")
+                # Don't fail - let it retry in background
+        
+        # Check if initial connection failed
+        if self._initial_connection_error:
+            # Stop the task
+            self.is_running = False
+            if not self._stream_task.done():
+                self._stream_task.cancel()
+            # Re-raise the error to stop the service
+            raise self._initial_connection_error
         
         logger.info("websocket_listener_started")
     
@@ -181,6 +204,7 @@ class WebSocketListener:
         Main stream loop with automatic reconnection.
         
         Implements exponential backoff for reconnection attempts.
+        On initial connection failure (auth errors), stops the service.
         """
         while self.is_running:
             # Use lock to prevent concurrent connection attempts
@@ -350,8 +374,41 @@ class WebSocketListener:
                         "authentication" in error_str.lower() or
                         "unauthorized" in error_str.lower() or
                         "401" in error_str or
-                        "403" in error_str
+                        "403" in error_str or
+                        "request is not authorized" in error_str.lower()
                     )
+                    
+                    # On initial connection, if auth fails, stop the service
+                    if self._is_initial_connection and (is_auth_error or is_timeout):
+                        logger.critical(
+                            "websocket_initial_connection_failed",
+                            error=error_str,
+                            error_type=error_type,
+                            message="Initial WebSocket connection failed - stopping service. Please update master credentials via the app and restart the service.",
+                            action="STOPPING_SERVICE"
+                        )
+                        
+                        # Stop the service
+                        self.is_running = False
+                        
+                        # Store error for start() to raise
+                        self._initial_connection_error = RuntimeError(
+                            f"Initial WebSocket connection failed: {error_str}. "
+                            "Please update master account credentials via the app and restart the service using: sudo systemctl restart trade-copier"
+                        )
+                        
+                        # Signal that initial connection attempt completed
+                        self._initial_connection_event.set()
+                        
+                        # Send critical alert
+                        alert_manager = await get_alert_manager()
+                        await alert_manager.alert_system_error(
+                            error=f"Initial WebSocket connection failed: {error_str}. Please update master account credentials via the app and restart the service.",
+                            component="WebSocketListener"
+                        )
+                        
+                        # Break out of loop
+                        break
                     
                     # Check if this is a rate limit error (HTTP 429)
                     # Check multiple patterns to catch different error formats
@@ -528,11 +585,17 @@ class WebSocketListener:
             # Mark as connected on first successful message
             if not self.is_connected:
                 self.is_connected = True
+                self._is_initial_connection = False  # Mark initial connection as successful
                 self.reconnect_attempts = 0
                 self._rate_limited = False  # Reset rate limit flag on successful connection
                 self._last_rate_limit_time = None  # Reset rate limit timestamp
                 self._rapid_failure_count = 0  # Reset rapid failure counter
                 self._last_connection_attempt = None  # Reset connection attempt timestamp
+                
+                # Signal that initial connection succeeded
+                if not self._initial_connection_event.is_set():
+                    self._initial_connection_event.set()
+                
                 logger.info("websocket_connected")
                 
                 # Alert successful reconnection
