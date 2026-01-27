@@ -181,11 +181,15 @@ class WebSocketListener:
         """
         while self.is_running:
             try:
-                logger.info("websocket_connecting")
+                logger.info("websocket_connecting", attempt=self.reconnect_attempts + 1)
                 
                 # Run stream (blocks until disconnected)
-                # Use _run_forever() directly since we're already in async context
-                await self.stream._run_forever()
+                # Wrap in try-except to catch any exceptions from SDK
+                try:
+                    await self.stream._run_forever()
+                except Exception as stream_error:
+                    # Re-raise so our outer handler can process it
+                    raise stream_error
                 
                 # If we reach here, stream disconnected
                 self.is_connected = False
@@ -205,12 +209,19 @@ class WebSocketListener:
                 error_str = str(e)
                 error_type = type(e).__name__
                 
-                # Log the raw error for debugging
-                logger.debug(
+                # Stop the stream immediately to prevent SDK from retrying
+                try:
+                    await self.stream.stop_ws()
+                except Exception as stop_error:
+                    logger.debug("error_stopping_stream_after_error", error=str(stop_error))
+                
+                # Log the raw error (INFO level so we can see it)
+                logger.info(
                     "websocket_exception_caught",
                     error_type=error_type,
                     error_message=error_str,
-                    reconnect_attempts=self.reconnect_attempts
+                    reconnect_attempts=self.reconnect_attempts,
+                    message="Exception caught in websocket stream - applying backoff"
                 )
                 
                 # Check if this is an authentication error
@@ -266,11 +277,12 @@ class WebSocketListener:
                         error_type=error_type,
                         reconnect_attempts=self.reconnect_attempts,
                         message="Rate limited by Alpaca (HTTP 429) - using extended backoff",
-                        next_delay_seconds=60 * (2 ** (self.reconnect_attempts))
+                        next_delay_seconds=60 * (2 ** (self.reconnect_attempts)),
+                        action="Stopping stream and waiting before retry"
                     )
                     
                     # Alert about error (but only once to avoid spam)
-                    if self.reconnect_attempts == 0:  # Only alert on first rate limit
+                    if self.reconnect_attempts <= 1:  # Alert on first rate limit
                         alert_manager = await get_alert_manager()
                         await alert_manager.alert_websocket_disconnected(
                             f"Rate limited by Alpaca: {error_str}. Using extended backoff."
