@@ -221,6 +221,7 @@ class WebSocketListener:
                 self._last_connection_attempt = current_time
                 
                 try:
+                    connection_start = time.time()
                     logger.info("websocket_connecting", attempt=self.reconnect_attempts + 1)
                     
                     # Run stream (blocks until disconnected)
@@ -228,6 +229,19 @@ class WebSocketListener:
                     try:
                         await self.stream._run_forever()
                     except Exception as stream_error:
+                        # Check if connection failed very quickly (< 2 seconds)
+                        # This indicates SDK was retrying internally
+                        connection_duration = time.time() - connection_start
+                        if connection_duration < 2.0:
+                            logger.warning(
+                                "websocket_quick_failure_detected",
+                                duration_seconds=connection_duration,
+                                error=str(stream_error),
+                                message="Connection failed very quickly - SDK likely retrying internally",
+                                action="Applying extended backoff"
+                            )
+                            # Mark as rate limited to use extended backoff
+                            self._rate_limited = True
                         # Re-raise so our outer handler can process it
                         raise stream_error
                 
@@ -248,6 +262,22 @@ class WebSocketListener:
                     self.is_connected = False
                     error_str = str(e)
                     error_type = type(e).__name__
+                    
+                    # Check if this was a very quick failure (SDK retrying internally)
+                    quick_failure_detected = False
+                    if self._last_connection_attempt:
+                        time_since_attempt = time.time() - self._last_connection_attempt
+                        if time_since_attempt < 2.0:
+                            # Very quick failure - SDK was retrying internally
+                            quick_failure_detected = True
+                            logger.warning(
+                                "websocket_quick_failure_after_exception",
+                                time_since_attempt=time_since_attempt,
+                                error=error_str,
+                                message="Exception occurred very quickly - SDK likely retrying internally",
+                                action="Marking as rate limited for extended backoff"
+                            )
+                            self._rate_limited = True
                     
                     # Stop and recreate the stream to prevent SDK internal retries
                     try:
@@ -317,20 +347,31 @@ class WebSocketListener:
                         # Use extended backoff for auth errors (same as rate limits)
                         await self._handle_reconnection(is_rate_limit=True)
                         
-                    elif is_rate_limit:
+                    elif is_rate_limit or quick_failure_detected:
                         import time
                         self._rate_limited = True
                         self._last_rate_limit_time = time.time()
                         
-                        logger.warning(
-                            "websocket_rate_limited",
-                            error=error_str,
-                            error_type=error_type,
-                            reconnect_attempts=self.reconnect_attempts,
-                            message="Rate limited by Alpaca (HTTP 429) - using extended backoff",
-                            next_delay_seconds=60 * (2 ** (self.reconnect_attempts)),
-                            action="Stopping stream and waiting before retry"
-                        )
+                        if quick_failure_detected:
+                            logger.warning(
+                                "websocket_quick_failure_rate_limited",
+                                error=error_str,
+                                error_type=error_type,
+                                reconnect_attempts=self.reconnect_attempts,
+                                message="Quick failure detected - SDK retrying internally - using extended backoff",
+                                next_delay_seconds=60 * (2 ** (self.reconnect_attempts)),
+                                action="Stopping stream and waiting before retry"
+                            )
+                        else:
+                            logger.warning(
+                                "websocket_rate_limited",
+                                error=error_str,
+                                error_type=error_type,
+                                reconnect_attempts=self.reconnect_attempts,
+                                message="Rate limited by Alpaca (HTTP 429) - using extended backoff",
+                                next_delay_seconds=60 * (2 ** (self.reconnect_attempts)),
+                                action="Stopping stream and waiting before retry"
+                            )
                         
                         # Alert about error (but only once to avoid spam)
                         if self.reconnect_attempts <= 1:  # Alert on first rate limit
