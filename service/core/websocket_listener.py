@@ -203,10 +203,43 @@ class WebSocketListener:
                 self.is_connected = False
                 error_str = str(e)
                 
+                # Check if this is an authentication error
+                is_auth_error = (
+                    "failed to authenticate" in error_str.lower() or
+                    "authentication" in error_str.lower() or
+                    "unauthorized" in error_str.lower() or
+                    "401" in error_str or
+                    "403" in error_str
+                )
+                
                 # Check if this is a rate limit error (HTTP 429)
                 is_rate_limit = "429" in error_str or "rate limit" in error_str.lower() or "too many requests" in error_str.lower()
                 
-                if is_rate_limit:
+                if is_auth_error:
+                    # Authentication errors are critical - log and alert but still retry with longer delay
+                    logger.critical(
+                        "websocket_authentication_failed",
+                        error=error_str,
+                        reconnect_attempts=self.reconnect_attempts,
+                        message="Authentication failed - check API keys and environment (paper vs live)",
+                        paper_trading=settings.use_paper_trading,
+                        alpaca_base_url=settings.alpaca_base_url
+                    )
+                    
+                    # Alert about authentication failure
+                    alert_manager = await get_alert_manager()
+                    await alert_manager.alert_system_error(
+                        error=f"WebSocket authentication failed: {error_str}. Check API keys and ensure paper trading setting matches your API keys.",
+                        component="WebSocketListener"
+                    )
+                    
+                    if not self.is_running:
+                        break
+                    
+                    # Use extended backoff for auth errors (same as rate limits)
+                    await self._handle_reconnection(is_rate_limit=True)
+                    
+                elif is_rate_limit:
                     self._rate_limited = True
                     logger.warning(
                         "websocket_rate_limited",
@@ -214,6 +247,16 @@ class WebSocketListener:
                         reconnect_attempts=self.reconnect_attempts,
                         message="Rate limited by Alpaca - using extended backoff"
                     )
+                    
+                    # Alert about error
+                    alert_manager = await get_alert_manager()
+                    await alert_manager.alert_websocket_disconnected(error_str)
+                    
+                    if not self.is_running:
+                        break
+                    
+                    # Wait before reconnecting (longer delay for rate limits)
+                    await self._handle_reconnection(is_rate_limit=True)
                 else:
                     logger.error(
                         "websocket_stream_error",
@@ -221,16 +264,16 @@ class WebSocketListener:
                         reconnect_attempts=self.reconnect_attempts,
                         exc_info=True
                     )
-                
-                # Alert about error
-                alert_manager = await get_alert_manager()
-                await alert_manager.alert_websocket_disconnected(error_str)
-                
-                if not self.is_running:
-                    break
-                
-                # Wait before reconnecting (longer delay for rate limits)
-                await self._handle_reconnection(is_rate_limit=is_rate_limit)
+                    
+                    # Alert about error
+                    alert_manager = await get_alert_manager()
+                    await alert_manager.alert_websocket_disconnected(error_str)
+                    
+                    if not self.is_running:
+                        break
+                    
+                    # Wait before reconnecting (normal delay)
+                    await self._handle_reconnection(is_rate_limit=False)
     
     async def _handle_reconnection(self, is_rate_limit: bool = False):
         """
