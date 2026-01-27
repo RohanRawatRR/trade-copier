@@ -83,6 +83,7 @@ class WebSocketListener:
         self.max_reconnect_attempts = 10
         self._stream_task: Optional[asyncio.Task] = None
         self._rate_limited = False  # Track if we hit rate limit (429)
+        self._last_rate_limit_time: Optional[float] = None  # Track when we last hit rate limit
         
         logger.info(
             "websocket_listener_initialized",
@@ -202,6 +203,15 @@ class WebSocketListener:
             except Exception as e:
                 self.is_connected = False
                 error_str = str(e)
+                error_type = type(e).__name__
+                
+                # Log the raw error for debugging
+                logger.debug(
+                    "websocket_exception_caught",
+                    error_type=error_type,
+                    error_message=error_str,
+                    reconnect_attempts=self.reconnect_attempts
+                )
                 
                 # Check if this is an authentication error
                 is_auth_error = (
@@ -213,7 +223,13 @@ class WebSocketListener:
                 )
                 
                 # Check if this is a rate limit error (HTTP 429)
-                is_rate_limit = "429" in error_str or "rate limit" in error_str.lower() or "too many requests" in error_str.lower()
+                # Check multiple patterns to catch different error formats
+                is_rate_limit = (
+                    "429" in error_str or 
+                    "rate limit" in error_str.lower() or 
+                    "too many requests" in error_str.lower() or
+                    "server rejected" in error_str.lower() and "429" in error_str
+                )
                 
                 if is_auth_error:
                     # Authentication errors are critical - log and alert but still retry with longer delay
@@ -240,17 +256,25 @@ class WebSocketListener:
                     await self._handle_reconnection(is_rate_limit=True)
                     
                 elif is_rate_limit:
+                    import time
                     self._rate_limited = True
+                    self._last_rate_limit_time = time.time()
+                    
                     logger.warning(
                         "websocket_rate_limited",
                         error=error_str,
+                        error_type=error_type,
                         reconnect_attempts=self.reconnect_attempts,
-                        message="Rate limited by Alpaca - using extended backoff"
+                        message="Rate limited by Alpaca (HTTP 429) - using extended backoff",
+                        next_delay_seconds=60 * (2 ** (self.reconnect_attempts))
                     )
                     
-                    # Alert about error
-                    alert_manager = await get_alert_manager()
-                    await alert_manager.alert_websocket_disconnected(error_str)
+                    # Alert about error (but only once to avoid spam)
+                    if self.reconnect_attempts == 0:  # Only alert on first rate limit
+                        alert_manager = await get_alert_manager()
+                        await alert_manager.alert_websocket_disconnected(
+                            f"Rate limited by Alpaca: {error_str}. Using extended backoff."
+                        )
                     
                     if not self.is_running:
                         break
@@ -309,7 +333,8 @@ class WebSocketListener:
                 "websocket_rate_limit_backoff",
                 attempt=self.reconnect_attempts,
                 delay_seconds=delay,
-                message="Using extended backoff due to rate limiting"
+                max_attempts=self.max_reconnect_attempts,
+                message=f"Rate limited - waiting {delay}s before retry (attempt {self.reconnect_attempts}/{self.max_reconnect_attempts})"
             )
         else:
             # Normal exponential backoff: 5s, 10s, 20s, 40s, etc.
@@ -340,6 +365,7 @@ class WebSocketListener:
                 self.is_connected = True
                 self.reconnect_attempts = 0
                 self._rate_limited = False  # Reset rate limit flag on successful connection
+                self._last_rate_limit_time = None  # Reset rate limit timestamp
                 logger.info("websocket_connected")
                 
                 # Alert successful reconnection
