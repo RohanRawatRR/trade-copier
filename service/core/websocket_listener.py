@@ -85,6 +85,8 @@ class WebSocketListener:
         self._rate_limited = False  # Track if we hit rate limit (429)
         self._last_rate_limit_time: Optional[float] = None  # Track when we last hit rate limit
         self._connection_lock = asyncio.Lock()  # Prevent concurrent connection attempts
+        self._last_connection_attempt: Optional[float] = None  # Track last connection attempt time
+        self._rapid_failure_count = 0  # Track rapid consecutive failures
         
         logger.info(
             "websocket_listener_initialized",
@@ -183,6 +185,41 @@ class WebSocketListener:
         while self.is_running:
             # Use lock to prevent concurrent connection attempts
             async with self._connection_lock:
+                import time
+                current_time = time.time()
+                
+                # Detect rapid failures (multiple attempts within 2 seconds)
+                if self._last_connection_attempt and (current_time - self._last_connection_attempt) < 2:
+                    self._rapid_failure_count += 1
+                    if self._rapid_failure_count >= 3:
+                        # SDK is retrying rapidly - force backoff
+                        logger.warning(
+                            "websocket_rapid_failures_detected",
+                            rapid_failures=self._rapid_failure_count,
+                            message="SDK is retrying rapidly - forcing extended backoff",
+                            action="Stopping stream and applying backoff"
+                        )
+                        try:
+                            await self.stream.stop_ws()
+                        except Exception:
+                            pass
+                        # Recreate stream to break SDK retry loop
+                        self.stream = TradingStream(
+                            api_key=self.master_api_key,
+                            secret_key=self.master_secret_key,
+                            paper=settings.use_paper_trading
+                        )
+                        self.stream.subscribe_trade_updates(self._handle_trade_update)
+                        self._rapid_failure_count = 0
+                        # Use extended backoff
+                        await self._handle_reconnection(is_rate_limit=True)
+                        continue
+                else:
+                    # Reset counter if enough time has passed
+                    self._rapid_failure_count = 0
+                
+                self._last_connection_attempt = current_time
+                
                 try:
                     logger.info("websocket_connecting", attempt=self.reconnect_attempts + 1)
                     
@@ -395,6 +432,8 @@ class WebSocketListener:
                 self.reconnect_attempts = 0
                 self._rate_limited = False  # Reset rate limit flag on successful connection
                 self._last_rate_limit_time = None  # Reset rate limit timestamp
+                self._rapid_failure_count = 0  # Reset rapid failure counter
+                self._last_connection_attempt = None  # Reset connection attempt timestamp
                 logger.info("websocket_connected")
                 
                 # Alert successful reconnection
