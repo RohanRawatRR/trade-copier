@@ -156,16 +156,20 @@ class WebSocketListener:
         # Start stream in background task
         self._stream_task = asyncio.create_task(self._run_stream())
         
-        # Wait for initial connection attempt (with timeout)
+        # Wait for initial connection attempt (with longer timeout for legitimate connections)
         try:
-            await asyncio.wait_for(self._initial_connection_event.wait(), timeout=10.0)
+            await asyncio.wait_for(self._initial_connection_event.wait(), timeout=20.0)
         except asyncio.TimeoutError:
-            # If timeout, check if we're connected
+            # If timeout waiting for event, check if we're connected
             if not self.is_connected:
-                logger.warning("websocket_initial_connection_timeout", message="Initial connection attempt timed out")
-                # Don't fail - let it retry in background
+                logger.warning(
+                    "websocket_initial_connection_timeout", 
+                    message="Initial connection attempt timed out - service will continue retrying in background"
+                )
+                # Don't fail - let it retry in background (might be network delay)
+                # Only fail on actual authentication errors
         
-        # Check if initial connection failed
+        # Check if initial connection failed with authentication error
         if self._initial_connection_error:
             # Stop the task
             self.is_running = False
@@ -248,40 +252,56 @@ class WebSocketListener:
                     connection_start = time.time()
                     logger.info("websocket_connecting", attempt=self.reconnect_attempts + 1)
                     
-                    # Wrap _run_forever() with a short timeout to detect SDK internal retries
-                    # If SDK is retrying internally, it will fail quickly (< 3 seconds)
-                    # Normal connections either succeed (no timeout) or fail immediately
+                    # For initial connection, use a longer timeout (15 seconds)
+                    # This allows legitimate connections to establish
+                    # Only fail-fast on actual authentication errors, not timeouts
+                    initial_timeout = 15.0 if self._is_initial_connection else 3.0
+                    
                     try:
-                        # Use 3-second timeout - if SDK retries internally, it will fail quickly
                         await asyncio.wait_for(
                             self.stream._run_forever(),
-                            timeout=3.0
+                            timeout=initial_timeout
                         )
                     except asyncio.TimeoutError:
-                        # Timeout after 3 seconds - check if we're connected
+                        # Timeout occurred - check if we're connected
                         connection_duration = time.time() - connection_start
                         if not self.is_connected:
-                            # Not connected after 3 seconds - SDK was likely retrying internally
-                            logger.warning(
-                                "websocket_timeout_not_connected",
-                                duration_seconds=connection_duration,
-                                message="Connection attempt timed out without connecting - SDK likely retrying internally",
-                                action="Stopping stream and applying extended backoff"
-                            )
-                            try:
-                                await self.stream.stop_ws()
-                            except Exception:
-                                pass
-                            # Recreate stream
-                            self.stream = TradingStream(
-                                api_key=self.master_api_key,
-                                secret_key=self.master_secret_key,
-                                paper=settings.use_paper_trading
-                            )
-                            self.stream.subscribe_trade_updates(self._handle_trade_update)
-                            # Mark as rate limited and trigger extended backoff
-                            self._rate_limited = True
-                            raise TimeoutError("WebSocket connection timed out - SDK internal retries detected")
+                            # Not connected after timeout
+                            if self._is_initial_connection:
+                                # On initial connection, timeout might be normal (network delay)
+                                # Don't fail-fast on timeout, let it retry with backoff
+                                logger.warning(
+                                    "websocket_initial_timeout",
+                                    duration_seconds=connection_duration,
+                                    message="Initial connection attempt timed out - will retry with backoff",
+                                    action="Continuing with retry logic"
+                                )
+                                # Don't raise - let it fall through to retry logic
+                                # Signal that initial connection attempt completed (but failed)
+                                if not self._initial_connection_event.is_set():
+                                    self._initial_connection_event.set()
+                            else:
+                                # Subsequent timeouts - SDK likely retrying internally
+                                logger.warning(
+                                    "websocket_timeout_not_connected",
+                                    duration_seconds=connection_duration,
+                                    message="Connection attempt timed out without connecting - SDK likely retrying internally",
+                                    action="Stopping stream and applying extended backoff"
+                                )
+                                try:
+                                    await self.stream.stop_ws()
+                                except Exception:
+                                    pass
+                                # Recreate stream
+                                self.stream = TradingStream(
+                                    api_key=self.master_api_key,
+                                    secret_key=self.master_secret_key,
+                                    paper=settings.use_paper_trading
+                                )
+                                self.stream.subscribe_trade_updates(self._handle_trade_update)
+                                # Mark as rate limited and trigger extended backoff
+                                self._rate_limited = True
+                                raise TimeoutError("WebSocket connection timed out - SDK internal retries detected")
                         # If connected, timeout is normal (stream is running) - continue
                         continue
                     except Exception as stream_error:
@@ -378,13 +398,14 @@ class WebSocketListener:
                         "request is not authorized" in error_str.lower()
                     )
                     
-                    # On initial connection, if auth fails, stop the service
-                    if self._is_initial_connection and (is_auth_error or is_timeout):
+                    # On initial connection, only fail-fast on authentication errors (not timeouts)
+                    # Timeouts might be due to network issues and should retry
+                    if self._is_initial_connection and is_auth_error:
                         logger.critical(
                             "websocket_initial_connection_failed",
                             error=error_str,
                             error_type=error_type,
-                            message="Initial WebSocket connection failed - stopping service. Please update master credentials via the app and restart the service.",
+                            message="Initial WebSocket connection failed - authentication error. Please update master credentials via the app and restart the service.",
                             action="STOPPING_SERVICE"
                         )
                         
@@ -409,6 +430,18 @@ class WebSocketListener:
                         
                         # Break out of loop
                         break
+                    elif self._is_initial_connection and is_timeout:
+                        # Timeout on initial connection - signal completion but don't fail-fast
+                        # Let it retry with backoff
+                        logger.warning(
+                            "websocket_initial_timeout_retrying",
+                            error=error_str,
+                            message="Initial connection timed out - will retry with backoff",
+                            action="Continuing with retry logic"
+                        )
+                        # Signal that initial connection attempt completed (but failed)
+                        if not self._initial_connection_event.is_set():
+                            self._initial_connection_event.set()
                     
                     # Check if this is a rate limit error (HTTP 429)
                     # Check multiple patterns to catch different error formats
