@@ -49,6 +49,20 @@ export function EquityAnalyticsChart() {
   const [timePeriod, setTimePeriod] = useState<TimePeriod>('7d');
   const [chartType, setChartType] = useState<ChartType>('line');
 
+  // Calculate days based on time period
+  const getDaysCount = (period: TimePeriod): number => {
+    switch (period) {
+      case '7d': return 7;
+      case '30d': return 30;
+      case '90d': return 90;
+      case '1y': return 365;
+      case 'all': return 365; // For now, limit to 1 year
+      default: return 7;
+    }
+  };
+
+  const days = getDaysCount(timePeriod);
+
   // Fetch account balances
   const { data, isLoading, error } = useQuery({
     queryKey: ['account-balances'],
@@ -60,6 +74,21 @@ export function EquityAnalyticsChart() {
     refetchInterval: 30000, // Refresh every 30 seconds
   });
 
+  // Fetch historical equity data from Alpaca Portfolio History API
+  const { data: historyData, isLoading: isLoadingHistory } = useQuery({
+    queryKey: ['equity-history', days, selectedAccounts],
+    queryFn: async () => {
+      const accountIds = selectedAccounts.length > 0 
+        ? selectedAccounts.join(',')
+        : '';
+      const response = await fetch(`/api/accounts/equity-history?days=${days}${accountIds ? `&account_ids=${accountIds}` : ''}`);
+      if (!response.ok) throw new Error('Failed to fetch equity history');
+      return response.json();
+    },
+    refetchInterval: 30000, // Refresh every 30 seconds
+    enabled: selectedAccounts.length > 0 || (data?.data && (data.data.master || data.data.clients?.length > 0)), // Only fetch when we have accounts
+  });
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -69,34 +98,48 @@ export function EquityAnalyticsChart() {
     }).format(value);
   };
 
-  // Prepare accounts list
+  // Prepare accounts list with growth data
   const allAccounts = useMemo(() => {
-    const accounts: Array<{ id: string; name: string; equity: number; type: 'master' | 'client' }> = [];
+    const accounts: Array<{ 
+      id: string; 
+      name: string; 
+      equity: number; 
+      type: 'master' | 'client';
+      growth?: number;
+      growthPercent?: number;
+    }> = [];
     
     if (data?.data) {
       if (data.data.master && data.data.master.status === 'success') {
+        const growthInfo = historyData?.data?.growth?.['master'];
         accounts.push({
           id: 'master',
           name: `Master (${data.data.master.account_id})`,
           equity: data.data.master.equity || 0,
           type: 'master',
+          growth: growthInfo?.growth || 0,
+          growthPercent: growthInfo?.growthPercent || 0,
         });
       }
       
       data.data.clients?.forEach((balance: any) => {
         if (balance.status === 'success') {
+          const accountKey = `client_${balance.account_id}`;
+          const growthInfo = historyData?.data?.growth?.[accountKey];
           accounts.push({
-            id: `client_${balance.account_id}`,
+            id: accountKey,
             name: balance.account_name || balance.account_id,
             equity: balance.equity || 0,
             type: 'client',
+            growth: growthInfo?.growth || 0,
+            growthPercent: growthInfo?.growthPercent || 0,
           });
         }
       });
     }
     
     return accounts;
-  }, [data]);
+  }, [data, historyData]);
 
   // Initialize selected accounts (select all by default)
   useMemo(() => {
@@ -113,46 +156,87 @@ export function EquityAnalyticsChart() {
     }));
   }, [allAccounts]);
 
-  // Calculate days based on time period
-  const getDaysCount = (period: TimePeriod): number => {
-    switch (period) {
-      case '7d': return 7;
-      case '30d': return 30;
-      case '90d': return 90;
-      case '1y': return 365;
-      case 'all': return 365; // For now, limit to 1 year
-      default: return 7;
-    }
-  };
-
-  // Prepare chart data
+  // Prepare chart data from Alpaca Portfolio History
   const chartData: EquityDataPoint[] = useMemo(() => {
-    const days = getDaysCount(timePeriod);
-    const now = new Date();
-    const dataPoints: EquityDataPoint[] = [];
-    
-    // Get selected accounts data
+    const histories = historyData?.data?.histories || {};
     const selectedAccountsData = allAccounts.filter(acc => selectedAccounts.includes(acc.id));
     
-    // Create data points for the selected time period
-    for (let i = days - 1; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
+    if (selectedAccountsData.length === 0) {
+      return [];
+    }
+
+    // Get all unique timestamps from all histories
+    const allTimestamps = new Set<number>();
+    selectedAccountsData.forEach(account => {
+      const history = histories[account.id];
+      if (history) {
+        history.forEach((point: any) => {
+          allTimestamps.add(point.timestamp);
+        });
+      }
+    });
+
+    // Sort timestamps
+    const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
+
+    // Create data points
+    const dataPoints: EquityDataPoint[] = sortedTimestamps.map((timestamp) => {
+      const date = new Date(timestamp * 1000); // Alpaca returns Unix timestamp in seconds
       
       const dataPoint: EquityDataPoint = {
         date: format(date, days <= 30 ? 'MMM dd' : 'MMM dd, yyyy'),
       };
-      
+
       // Add equity value for each selected account
       selectedAccountsData.forEach((account) => {
-        dataPoint[account.id] = account.equity; // Using current equity for all dates (placeholder)
+        const history = histories[account.id];
+        if (history) {
+          // Find the closest data point for this timestamp
+          const point = history.find((p: any) => p.timestamp === timestamp);
+          if (point) {
+            dataPoint[account.id] = point.equity;
+          } else {
+            // If no exact match, use the most recent value before this timestamp
+            const beforePoint = history
+              .filter((p: any) => p.timestamp <= timestamp)
+              .sort((a: any, b: any) => b.timestamp - a.timestamp)[0];
+            if (beforePoint) {
+              dataPoint[account.id] = beforePoint.equity;
+            } else {
+              // Fallback to current equity if no historical data
+              dataPoint[account.id] = account.equity;
+            }
+          }
+        } else {
+          // No history data, use current equity
+          dataPoint[account.id] = account.equity;
+        }
       });
-      
-      dataPoints.push(dataPoint);
+
+      return dataPoint;
+    });
+
+    // If no historical data, create placeholder data points
+    if (dataPoints.length === 0) {
+      const now = new Date();
+      for (let i = days - 1; i >= 0; i--) {
+        const date = new Date(now);
+        date.setDate(date.getDate() - i);
+        
+        const dataPoint: EquityDataPoint = {
+          date: format(date, days <= 30 ? 'MMM dd' : 'MMM dd, yyyy'),
+        };
+        
+        selectedAccountsData.forEach((account) => {
+          dataPoint[account.id] = account.equity;
+        });
+        
+        dataPoints.push(dataPoint);
+      }
     }
-    
+
     return dataPoints;
-  }, [allAccounts, selectedAccounts, timePeriod]);
+  }, [allAccounts, selectedAccounts, timePeriod, historyData, days]);
 
   // Color palette for accounts
   const colorPalette = [
@@ -176,7 +260,7 @@ export function EquityAnalyticsChart() {
   // Get selected accounts for display
   const selectedAccountsData = allAccounts.filter(acc => selectedAccounts.includes(acc.id));
 
-  if (isLoading) {
+  if (isLoading || isLoadingHistory) {
     return (
       <Card>
         <CardHeader>
@@ -451,7 +535,11 @@ export function EquityAnalyticsChart() {
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                 {selectedAccountsData.map((account, index) => {
-                  const lastValue = chartData[chartData.length - 1]?.[account.id] || 0;
+                  const lastValue = chartData[chartData.length - 1]?.[account.id] || account.equity;
+                  const growthPercent = account.growthPercent || 0;
+                  const growth = account.growth || 0;
+                  const isPositive = growthPercent >= 0;
+                  
                   return (
                     <div 
                       key={account.id} 
@@ -467,9 +555,20 @@ export function EquityAnalyticsChart() {
                         <div className="text-muted-foreground text-xs font-medium truncate mb-1">
                           {account.name}
                         </div>
-                        <div className="text-base font-bold">
+                        <div className="text-base font-bold mb-1">
                           {formatCurrency(Number(lastValue))}
                         </div>
+                        {growthPercent !== 0 && (
+                          <div className={`text-xs font-semibold flex items-center gap-1 ${
+                            isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                          }`}>
+                            <TrendingUp className={`h-3 w-3 ${!isPositive ? 'rotate-180' : ''}`} />
+                            {isPositive ? '+' : ''}{growthPercent.toFixed(2)}%
+                            <span className="text-muted-foreground font-normal">
+                              ({isPositive ? '+' : ''}{formatCurrency(growth)})
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

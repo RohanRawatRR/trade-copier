@@ -136,6 +136,54 @@ export class AlpacaClient {
 
     return response.json();
   }
+
+  /**
+   * Get account portfolio history (equity and P/L over time)
+   * @param period - Time period: '1D', '1W', '1M', '3M', '1Y', 'all'
+   * @param timeframe - Timeframe: '1Min', '5Min', '15Min', '1H', '1D'
+   * @param endDate - End date (ISO 8601 format)
+   * @param startDate - Start date (ISO 8601 format)
+   * @returns Portfolio history with equity and profit/loss data
+   */
+  async getPortfolioHistory(params?: {
+    period?: '1D' | '1W' | '1M' | '3M' | '1Y' | 'all';
+    timeframe?: '1Min' | '5Min' | '15Min' | '1H' | '1D';
+    endDate?: string;
+    startDate?: string;
+  }): Promise<any> {
+    const queryParams = new URLSearchParams();
+    
+    if (params?.period) {
+      queryParams.append('period', params.period);
+    }
+    if (params?.timeframe) {
+      queryParams.append('timeframe', params.timeframe);
+    }
+    if (params?.endDate) {
+      queryParams.append('end_date', params.endDate);
+    }
+    if (params?.startDate) {
+      queryParams.append('start_date', params.startDate);
+    }
+
+    const url = `${this.baseUrl}/v2/account/portfolio/history${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    const response = await fetch(url, {
+      headers: this.getHeaders(),
+    });
+
+    if (!response.ok) {
+      let errorMessage: string;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || errorData.error || JSON.stringify(errorData);
+      } catch (jsonError) {
+        errorMessage = await response.text();
+      }
+      throw new Error(`Failed to fetch portfolio history: ${errorMessage}`);
+    }
+
+    return response.json();
+  }
 }
 
 /**
