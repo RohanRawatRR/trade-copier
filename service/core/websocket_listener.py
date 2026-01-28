@@ -299,21 +299,21 @@ class WebSocketListener:
                             # If connected, timeout is normal (stream is running) - continue
                             continue
                     
-                # If we reach here, stream disconnected normally
-                # (for initial connection, this means connection was established and then disconnected)
-                self.is_connected = False
+                    # If we reach here, stream disconnected normally
+                    # (for initial connection, this means connection was established and then disconnected)
+                    self.is_connected = False
+                    
+                    if not self.is_running:
+                        break
+                    
+                    # Alert about disconnection
+                    alert_manager = await get_alert_manager()
+                    await alert_manager.alert_websocket_disconnected("Stream ended unexpectedly")
+                    
+                    # Wait before reconnecting (exponential backoff)
+                    await self._handle_reconnection(is_rate_limit=False)
                 
-                if not self.is_running:
-                    break
-                
-                # Alert about disconnection
-                alert_manager = await get_alert_manager()
-                await alert_manager.alert_websocket_disconnected("Stream ended unexpectedly")
-                
-                # Wait before reconnecting (exponential backoff)
-                await self._handle_reconnection(is_rate_limit=False)
-                
-            except Exception as e:
+                except Exception as e:
                     self.is_connected = False
                     error_str = str(e)
                     error_type = type(e).__name__
