@@ -22,13 +22,12 @@ export async function GET(request: NextRequest) {
     startDate.setDate(startDate.getDate() - days);
     
     // Map time period to Alpaca period format
-    const getAlpacaPeriod = (days: number): '1D' | '1W' | '1M' | '3M' | '1Y' | 'all' => {
+    const getAlpacaPeriod = (days: number): '1D' | '1W' | '1M' | '3M' | '1A' => {
       if (days <= 1) return '1D';
       if (days <= 7) return '1W';
       if (days <= 30) return '1M';
       if (days <= 90) return '3M';
-      if (days <= 365) return '1Y';
-      return 'all';
+      return '1A'; // For 365 days, use 1Y period
     };
 
     const period = getAlpacaPeriod(days);

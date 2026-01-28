@@ -37,7 +37,7 @@ import {
 import { MultiSelect } from '@/components/ui/multi-select';
 
 type ChartType = 'line' | 'area' | 'bar';
-type TimePeriod = '7d' | '30d' | '90d' | '1y' | 'all';
+type TimePeriod = '7d' | '30d' | '90d' | '365d';
 
 interface EquityDataPoint {
   date: string;
@@ -55,8 +55,7 @@ export function EquityAnalyticsChart() {
       case '7d': return 7;
       case '30d': return 30;
       case '90d': return 90;
-      case '1y': return 365;
-      case 'all': return 365; // For now, limit to 1 year
+      case '365d': return 365;
       default: return 7;
     }
   };
@@ -319,7 +318,7 @@ export function EquityAnalyticsChart() {
                       {timePeriod === '7d' ? 'Last 7 Days' : 
                        timePeriod === '30d' ? 'Last 30 Days' :
                        timePeriod === '90d' ? 'Last 90 Days' :
-                       timePeriod === '1y' ? 'Last Year' : 'All Time'} • {selectedAccounts.length} account{selectedAccounts.length !== 1 ? 's' : ''} selected
+                       'Last 365 Days'} • {selectedAccounts.length} account{selectedAccounts.length !== 1 ? 's' : ''} selected
                     </p>
                   </div>
                 </div>
@@ -357,8 +356,7 @@ export function EquityAnalyticsChart() {
                       <SelectItem value="7d">Last 7 Days</SelectItem>
                       <SelectItem value="30d">Last 30 Days</SelectItem>
                       <SelectItem value="90d">Last 90 Days</SelectItem>
-                      <SelectItem value="1y">Last Year</SelectItem>
-                      <SelectItem value="all">All Time</SelectItem>
+                      <SelectItem value="365d">Last 365 Days</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
