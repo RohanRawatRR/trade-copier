@@ -183,6 +183,112 @@ class ScalingEngine:
                     )
                     # For covers, we buy back exactly what we are short (absolute value)
                     return float(Decimal(str(abs(client_owned_qty))).quantize(Decimal('0.000001'), rounding=ROUND_DOWN))
+                
+                # CASE 1B: Position type mismatch - skip trade
+                elif side.lower() == "buy" and client_owned_qty > 0:
+                    # Master is closing a short (buying), but client has a long position
+                    # Don't copy this trade - it would increase client's long position incorrectly
+                    logger.warning(
+                        "position_mismatch_skip_trade",
+                        symbol=symbol,
+                        client_account_id=client_account["account_id"],
+                        master_action="closing_short",
+                        client_position="long",
+                        client_qty=client_owned_qty,
+                        message=f"Master closed short position, but client has long position ({client_owned_qty} shares). Skipping trade to avoid position mismatch."
+                    )
+                    return None
+                
+                elif side.lower() == "sell" and client_owned_qty < 0:
+                    # Master is closing a long (selling), but client has a short position
+                    # Don't copy this trade - it would increase client's short position incorrectly
+                    logger.warning(
+                        "position_mismatch_skip_trade",
+                        symbol=symbol,
+                        client_account_id=client_account["account_id"],
+                        master_action="closing_long",
+                        client_position="short",
+                        client_qty=abs(client_owned_qty),
+                        message=f"Master closed long position, but client has short position ({abs(client_owned_qty)} shares). Skipping trade to avoid position mismatch."
+                    )
+                    return None
+            
+            # CASE 1C: Master closing position but client has no position - skip
+            # This handles the scenario where:
+            # - Master opens a position (buy/sell), but client's order fails
+            # - Master then closes the position, but client has no position to close
+            # - Without this check, client would enter the opposite direction (e.g., sell when no position = short)
+            # Example: Master buys 100 shares → Client buy fails → Master sells 100 shares → Skip client sell (prevents short)
+            if master_remaining == 0 and client_owned_qty == 0:
+                logger.info(
+                    "master_exit_client_no_position",
+                    symbol=symbol,
+                    client_account_id=client_account["account_id"],
+                    master_action=f"closing_{'short' if side.lower() == 'buy' else 'long'}",
+                    message=f"Master closed position, but client has no position (likely due to previous trade failure). Skipping trade to prevent entering opposite direction."
+                )
+                return None
+            
+            # CASE 1D: Master partially closing position with position type mismatch - skip
+            # Check if master is closing a short (buying) but client has opposite/no position
+            if side.lower() == "buy" and master_remaining < 0:
+                # Master is partially closing a short position
+                if client_owned_qty > 0:
+                    # Client has a long - buying would increase it, but master is closing
+                    logger.warning(
+                        "position_mismatch_skip_partial_close",
+                        symbol=symbol,
+                        client_account_id=client_account["account_id"],
+                        master_action="partially_closing_short",
+                        client_position="long",
+                        client_qty=client_owned_qty,
+                        master_remaining=master_remaining,
+                        message=f"Master partially closing short position, but client has long position ({client_owned_qty} shares). Skipping trade to avoid position mismatch."
+                    )
+                    return None
+                elif client_owned_qty == 0:
+                    # Client has no position - buying would open a long, but master is closing
+                    # This handles: Master partially closes short, but client's initial short order failed
+                    logger.warning(
+                        "position_mismatch_skip_partial_close",
+                        symbol=symbol,
+                        client_account_id=client_account["account_id"],
+                        master_action="partially_closing_short",
+                        client_position="none",
+                        master_remaining=master_remaining,
+                        message=f"Master partially closing short position, but client has no position (likely due to previous trade failure). Skipping trade to avoid opening incorrect position."
+                    )
+                    return None
+            
+            # Check if master is closing a long (selling) but client has opposite/no position
+            if side.lower() == "sell" and master_remaining > 0:
+                # Master is partially closing a long position
+                if client_owned_qty < 0:
+                    # Client has a short - selling would increase it, but master is closing
+                    logger.warning(
+                        "position_mismatch_skip_partial_close",
+                        symbol=symbol,
+                        client_account_id=client_account["account_id"],
+                        master_action="partially_closing_long",
+                        client_position="short",
+                        client_qty=abs(client_owned_qty),
+                        master_remaining=master_remaining,
+                        message=f"Master partially closing long position, but client has short position ({abs(client_owned_qty)} shares). Skipping trade to avoid position mismatch."
+                    )
+                    return None
+                elif client_owned_qty == 0:
+                    # Client has no position - selling would open a short, but master is closing
+                    # This handles: Master partially closes long, but client's initial long order failed
+                    logger.warning(
+                        "position_mismatch_skip_partial_close",
+                        symbol=symbol,
+                        client_account_id=client_account["account_id"],
+                        master_action="partially_closing_long",
+                        client_position="none",
+                        master_remaining=master_remaining,
+                        message=f"Master partially closing long position, but client has no position (likely due to previous trade failure). Skipping trade to avoid opening incorrect position."
+                    )
+                    return None
 
             # CASE 2: NORMAL PROPORTIONAL REPLICATION
             if side.lower() == "sell":
