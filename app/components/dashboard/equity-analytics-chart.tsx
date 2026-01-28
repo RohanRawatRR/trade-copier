@@ -403,6 +403,56 @@ export function EquityAnalyticsChart() {
             </div>
           </div>
           <CardContent className="pt-6">
+            {/* Account Summary - Moved to Top */}
+            {selectedAccountsData.length > 0 && (
+              <div className="mb-8 pb-6 border-b">
+                <h4 className="text-sm font-semibold text-muted-foreground mb-4 uppercase tracking-wide">
+                  Account Summary
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {selectedAccountsData.map((account, index) => {
+                    const lastValue = chartData[chartData.length - 1]?.[account.id] || account.equity;
+                    const growthPercent = account.growthPercent || 0;
+                    const growth = account.growth || 0;
+                    const isPositive = growthPercent >= 0;
+                    
+                    return (
+                      <div 
+                        key={account.id} 
+                        className="flex items-center gap-3 p-4 border rounded-lg bg-card hover:bg-muted/50 transition-colors"
+                      >
+                        <div 
+                          className="w-4 h-4 rounded-full flex-shrink-0 border-2 border-background shadow-sm"
+                          style={{ 
+                            backgroundColor: getAccountColor(account.id, index),
+                          }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-muted-foreground text-xs font-medium truncate mb-1">
+                            {account.name}
+                          </div>
+                          <div className="text-base font-bold mb-1">
+                            {formatCurrency(Number(lastValue))}
+                          </div>
+                          {growthPercent !== 0 && (
+                            <div className={`text-xs font-semibold flex items-center gap-1 ${
+                              isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                            }`}>
+                              <TrendingUp className={`h-3 w-3 ${!isPositive ? 'rotate-180' : ''}`} />
+                              {isPositive ? '+' : ''}{growthPercent.toFixed(2)}%
+                              <span className="text-muted-foreground font-normal">
+                                ({isPositive ? '+' : ''}{formatCurrency(growth)})
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            
             <div style={{ width: '100%', height: '500px' }}>
               <ResponsiveContainer width="100%" height="100%">
                 {chartType === 'line' && (
@@ -526,54 +576,6 @@ export function EquityAnalyticsChart() {
                   </BarChart>
                 )}
               </ResponsiveContainer>
-            </div>
-            
-            {/* Summary Stats */}
-            <div className="mt-8 pt-6 border-t">
-              <h4 className="text-sm font-semibold text-muted-foreground mb-4 uppercase tracking-wide">
-                Account Summary
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                {selectedAccountsData.map((account, index) => {
-                  const lastValue = chartData[chartData.length - 1]?.[account.id] || account.equity;
-                  const growthPercent = account.growthPercent || 0;
-                  const growth = account.growth || 0;
-                  const isPositive = growthPercent >= 0;
-                  
-                  return (
-                    <div 
-                      key={account.id} 
-                      className="flex items-center gap-3 p-4 border rounded-lg bg-card hover:bg-muted/50 transition-colors"
-                    >
-                      <div 
-                        className="w-4 h-4 rounded-full flex-shrink-0 border-2 border-background shadow-sm"
-                        style={{ 
-                          backgroundColor: getAccountColor(account.id, index),
-                        }}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-muted-foreground text-xs font-medium truncate mb-1">
-                          {account.name}
-                        </div>
-                        <div className="text-base font-bold mb-1">
-                          {formatCurrency(Number(lastValue))}
-                        </div>
-                        {growthPercent !== 0 && (
-                          <div className={`text-xs font-semibold flex items-center gap-1 ${
-                            isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-                          }`}>
-                            <TrendingUp className={`h-3 w-3 ${!isPositive ? 'rotate-180' : ''}`} />
-                            {isPositive ? '+' : ''}{growthPercent.toFixed(2)}%
-                            <span className="text-muted-foreground font-normal">
-                              ({isPositive ? '+' : ''}{formatCurrency(growth)})
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
             </div>
           </CardContent>
         </Card>
