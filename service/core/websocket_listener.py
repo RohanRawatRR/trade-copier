@@ -156,17 +156,22 @@ class WebSocketListener:
         # Start stream in background task
         self._stream_task = asyncio.create_task(self._run_stream())
         
-        # Wait for initial connection attempt (with longer timeout for legitimate connections)
+        # Wait for initial connection attempt (with timeout)
+        # The connection will signal completion either by:
+        # 1. Receiving first message (sets is_connected and signals event)
+        # 2. Authentication error (sets _initial_connection_error and signals event)
+        # 3. Timeout waiting for event (continues in background)
         try:
-            await asyncio.wait_for(self._initial_connection_event.wait(), timeout=20.0)
+            await asyncio.wait_for(self._initial_connection_event.wait(), timeout=30.0)
         except asyncio.TimeoutError:
             # If timeout waiting for event, check if we're connected
             if not self.is_connected:
                 logger.warning(
                     "websocket_initial_connection_timeout", 
-                    message="Initial connection attempt timed out - service will continue retrying in background"
+                    message="Initial connection attempt timed out waiting for first message - service will continue retrying in background. Connection may be established but waiting for trade events."
                 )
-                # Don't fail - let it retry in background (might be network delay)
+                # Don't fail - let it retry in background
+                # The connection might be established but no trades happening yet
                 # Only fail on actual authentication errors
         
         # Check if initial connection failed with authentication error
@@ -252,35 +257,24 @@ class WebSocketListener:
                     connection_start = time.time()
                     logger.info("websocket_connecting", attempt=self.reconnect_attempts + 1)
                     
-                    # For initial connection, use a longer timeout (15 seconds)
-                    # This allows legitimate connections to establish
-                    # Only fail-fast on actual authentication errors, not timeouts
-                    initial_timeout = 15.0 if self._is_initial_connection else 3.0
-                    
-                    try:
-                        await asyncio.wait_for(
-                            self.stream._run_forever(),
-                            timeout=initial_timeout
-                        )
-                    except asyncio.TimeoutError:
-                        # Timeout occurred - check if we're connected
-                        connection_duration = time.time() - connection_start
-                        if not self.is_connected:
-                            # Not connected after timeout
-                            if self._is_initial_connection:
-                                # On initial connection, timeout might be normal (network delay)
-                                # Don't fail-fast on timeout, let it retry with backoff
-                                logger.warning(
-                                    "websocket_initial_timeout",
-                                    duration_seconds=connection_duration,
-                                    message="Initial connection attempt timed out - will retry with backoff",
-                                    action="Continuing with retry logic"
-                                )
-                                # Don't raise - let it fall through to retry logic
-                                # Signal that initial connection attempt completed (but failed)
-                                if not self._initial_connection_event.is_set():
-                                    self._initial_connection_event.set()
-                            else:
+                    # For initial connection, don't use timeout wrapper
+                    # Let it connect naturally - timeout only in start() method waiting for event
+                    # For subsequent connections, use short timeout to detect SDK retries
+                    if self._is_initial_connection:
+                        # No timeout - let it connect and wait for first message
+                        # The start() method will timeout waiting for the event if needed
+                        await self.stream._run_forever()
+                    else:
+                        # Subsequent connections - use timeout to detect SDK retries
+                        try:
+                            await asyncio.wait_for(
+                                self.stream._run_forever(),
+                                timeout=3.0
+                            )
+                        except asyncio.TimeoutError:
+                            # Timeout occurred - check if we're connected
+                            connection_duration = time.time() - connection_start
+                            if not self.is_connected:
                                 # Subsequent timeouts - SDK likely retrying internally
                                 logger.warning(
                                     "websocket_timeout_not_connected",
@@ -302,39 +296,24 @@ class WebSocketListener:
                                 # Mark as rate limited and trigger extended backoff
                                 self._rate_limited = True
                                 raise TimeoutError("WebSocket connection timed out - SDK internal retries detected")
-                        # If connected, timeout is normal (stream is running) - continue
-                        continue
-                    except Exception as stream_error:
-                        # Check if connection failed very quickly (< 2 seconds)
-                        # This indicates SDK was retrying internally
-                        connection_duration = time.time() - connection_start
-                        if connection_duration < 2.0:
-                            logger.warning(
-                                "websocket_quick_failure_detected",
-                                duration_seconds=connection_duration,
-                                error=str(stream_error),
-                                message="Connection failed very quickly - SDK likely retrying internally",
-                                action="Applying extended backoff"
-                            )
-                            # Mark as rate limited to use extended backoff
-                            self._rate_limited = True
-                        # Re-raise so our outer handler can process it
-                        raise stream_error
+                            # If connected, timeout is normal (stream is running) - continue
+                            continue
+                    
+                # If we reach here, stream disconnected normally
+                # (for initial connection, this means connection was established and then disconnected)
+                self.is_connected = False
                 
-                    # If we reach here, stream disconnected
-                    self.is_connected = False
-                    
-                    if not self.is_running:
-                        break
-                    
-                    # Alert about disconnection
-                    alert_manager = await get_alert_manager()
-                    await alert_manager.alert_websocket_disconnected("Stream ended unexpectedly")
-                    
-                    # Wait before reconnecting (exponential backoff)
-                    await self._handle_reconnection(is_rate_limit=False)
+                if not self.is_running:
+                    break
                 
-                except Exception as e:
+                # Alert about disconnection
+                alert_manager = await get_alert_manager()
+                await alert_manager.alert_websocket_disconnected("Stream ended unexpectedly")
+                
+                # Wait before reconnecting (exponential backoff)
+                await self._handle_reconnection(is_rate_limit=False)
+                
+            except Exception as e:
                     self.is_connected = False
                     error_str = str(e)
                     error_type = type(e).__name__
