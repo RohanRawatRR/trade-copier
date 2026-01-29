@@ -270,10 +270,10 @@ export default function ClientsPage() {
                 <Upload className="mr-2 h-4 w-4" />
                 Bulk Upload
               </Button>
-              <Button onClick={() => setIsAddDialogOpen(true)}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Client
-              </Button>
+            <Button onClick={() => setIsAddDialogOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Client
+            </Button>
             </div>
           </CardHeader>
           <CardContent>
