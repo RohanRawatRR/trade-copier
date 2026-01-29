@@ -19,7 +19,9 @@ const historyCache = new LRUCache<string, any>({
 const getCachedHistory = (cacheKey: string): any | null => historyCache.get(cacheKey) || null;
 
 /** Store portfolio history in cache */
-const setCachedHistory = (cacheKey: string, data: any): void => historyCache.set(cacheKey, data);
+const setCachedHistory = (cacheKey: string, data: any): void => {
+  historyCache.set(cacheKey, data);
+};
 
 /**
  * Calculate true trading PnL, excluding deposits/withdrawals
@@ -128,11 +130,11 @@ export async function GET(request: NextRequest) {
       select: { account_id: true, account_name: true, encrypted_api_key: true, encrypted_secret_key: true },
     });
 
-    // Fetch master
-    const masterAccount = await prisma.masterAccount.findFirst({
-      where: { is_active: true },
-      select: { account_id: true, encrypted_api_key: true, encrypted_secret_key: true },
-    });
+     // Fetch master
+     const masterAccount = await (prisma as any).masterAccount.findFirst({
+       where: { is_active: true },
+       select: { account_id: true, encrypted_api_key: true, encrypted_secret_key: true },
+     });
 
     const portfolioHistories: Record<string, any> = {};
     const growthData: Record<string, { current: number; previous: number; growth: number; growthPercent: number }> = {};
