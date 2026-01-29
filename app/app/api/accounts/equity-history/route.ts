@@ -22,12 +22,12 @@ export async function GET(request: NextRequest) {
     startDate.setDate(startDate.getDate() - days);
     
     // Map time period to Alpaca period format
-    const getAlpacaPeriod = (days: number): '1D' | '1W' | '1M' | '3M' | '1A' => {
+    const getAlpacaPeriod = (days: number): '1D' | '1W' | '1M' | '3M' | '1Y' => {
       if (days <= 1) return '1D';
       if (days <= 7) return '1W';
       if (days <= 30) return '1M';
       if (days <= 90) return '3M';
-      return '1A'; // For 365 days, use 1A period
+      return '1Y'; // For 365 days, use 1Y period
     };
 
     const period = getAlpacaPeriod(days);
@@ -96,34 +96,17 @@ export async function GET(request: NextRequest) {
             equity: value,
           }));
 
-          // Calculate growth using Alpaca's profit_loss and profit_loss_pct arrays
+          // Calculate growth from first to last value
           if (history.equity.length >= 2) {
             const first = history.equity[0];
             const last = history.equity[history.equity.length - 1];
-            
-            // Use Alpaca's profit_loss array: sum all period P/L values to get total profit/loss
-            let totalProfitLoss = 0;
-            if (history.profit_loss && Array.isArray(history.profit_loss)) {
-              totalProfitLoss = history.profit_loss.reduce((sum: number, pl: number) => sum + (pl || 0), 0);
-            } else {
-              // Fallback to equity difference if profit_loss is not available
-              totalProfitLoss = last - first;
-            }
-
-            // Calculate growth percentage from profit_loss_pct or from total profit_loss
-            let growthPercent = 0;
-            if (history.profit_loss_pct && Array.isArray(history.profit_loss_pct) && history.profit_loss_pct.length > 0) {
-              // Sum all period percentage changes (they're typically additive for daily periods)
-              growthPercent = history.profit_loss_pct.reduce((sum: number, pct: number) => sum + (pct || 0), 0);
-            } else if (first !== 0) {
-              // Fallback: calculate percentage from total profit_loss
-              growthPercent = (totalProfitLoss / first) * 100;
-            }
+            const growth = last - first;
+            const growthPercent = first !== 0 ? ((growth / first) * 100) : 0;
 
             growthData['master'] = {
               current: last,
               previous: first,
-              growth: totalProfitLoss,
+              growth,
               growthPercent,
             };
           }
@@ -161,34 +144,17 @@ export async function GET(request: NextRequest) {
               equity: value,
             }));
 
-            // Calculate growth using Alpaca's profit_loss and profit_loss_pct arrays
+            // Calculate growth from first to last value
             if (history.equity.length >= 2) {
               const first = history.equity[0];
               const last = history.equity[history.equity.length - 1];
-              
-              // Use Alpaca's profit_loss array: sum all period P/L values to get total profit/loss
-              let totalProfitLoss = 0;
-              if (history.profit_loss && Array.isArray(history.profit_loss)) {
-                totalProfitLoss = history.profit_loss.reduce((sum: number, pl: number) => sum + (pl || 0), 0);
-              } else {
-                // Fallback to equity difference if profit_loss is not available
-                totalProfitLoss = last - first;
-              }
-
-              // Calculate growth percentage from profit_loss_pct or from total profit_loss
-              let growthPercent = 0;
-              if (history.profit_loss_pct && Array.isArray(history.profit_loss_pct) && history.profit_loss_pct.length > 0) {
-                // Sum all period percentage changes (they're typically additive for daily periods)
-                growthPercent = history.profit_loss_pct.reduce((sum: number, pct: number) => sum + (pct || 0), 0);
-              } else if (first !== 0) {
-                // Fallback: calculate percentage from total profit_loss
-                growthPercent = (totalProfitLoss / first) * 100;
-              }
+              const growth = last - first;
+              const growthPercent = first !== 0 ? ((growth / first) * 100) : 0;
 
               growthData[accountKey] = {
                 current: last,
                 previous: first,
-                growth: totalProfitLoss,
+                growth,
                 growthPercent,
               };
             }
