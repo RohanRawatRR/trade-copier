@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { Check, ChevronDown, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -22,20 +23,47 @@ export function MultiSelect({
 }: MultiSelectProps) {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+  const [position, setPosition] = React.useState<{ top: number; left: number; width: number } | null>(null);
+
+  // Calculate position once when opening
+  React.useEffect(() => {
+    if (open && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      setPosition({
+        top: rect.bottom + 6,
+        left: rect.left,
+        width: rect.width,
+      });
+    } else {
+      setPosition(null);
+    }
+  }, [open]);
 
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (
+        containerRef.current && 
+        !containerRef.current.contains(event.target as Node) &&
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node)
+      ) {
         setOpen(false);
       }
     };
 
+    const handleScroll = () => {
+      setOpen(false);
+    };
+
     if (open) {
       document.addEventListener('mousedown', handleClickOutside);
+      window.addEventListener('scroll', handleScroll, true);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [open]);
 
@@ -107,8 +135,16 @@ export function MultiSelect({
           <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
         </button>
       </div>
-      {open && (
-        <div className="absolute z-50 mt-1.5 w-full rounded-md border bg-popover shadow-lg">
+      {open && position && typeof window !== 'undefined' && createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed z-[9999] rounded-md border bg-popover shadow-lg"
+          style={{
+            top: `${position.top}px`,
+            left: `${position.left}px`,
+            width: `${position.width}px`,
+          }}
+        >
           <div className="max-h-60 overflow-auto p-1">
             {options.length === 0 ? (
               <div className="px-2 py-1.5 text-sm text-muted-foreground">No options available</div>
@@ -138,7 +174,8 @@ export function MultiSelect({
               })
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

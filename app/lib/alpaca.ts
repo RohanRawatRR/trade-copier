@@ -139,14 +139,14 @@ export class AlpacaClient {
 
   /**
    * Get account portfolio history (equity and P/L over time)
-   * @param period - Time period: '1D', '1W', '1M', '3M', '1Y', 'all'
+   * @param period - Time period: '1D', '1W', '1M', '3M', '1A', 'all'
    * @param timeframe - Timeframe: '1Min', '5Min', '15Min', '1H', '1D'
    * @param endDate - End date (ISO 8601 format)
    * @param startDate - Start date (ISO 8601 format)
    * @returns Portfolio history with equity and profit/loss data
    */
   async getPortfolioHistory(params?: {
-    period?: '1D' | '1W' | '1M' | '3M' | '1Y' | 'all';
+    period?: '1D' | '1W' | '1M' | '3M' | '1A' | 'all';
     timeframe?: '1Min' | '5Min' | '15Min' | '1H' | '1D';
     endDate?: string;
     startDate?: string;
