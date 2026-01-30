@@ -32,6 +32,9 @@ export interface TradeAuditLog {
   master_qty: number;
   client_qty?: number;
   client_notional?: number;
+  client_order_id?: string;
+  client_avg_price?: number;
+  master_price?: number;
   status: 'success' | 'failed' | 'skipped';
   error_message?: string;
   retry_count: number;

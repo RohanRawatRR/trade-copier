@@ -138,6 +138,52 @@ export class AlpacaClient {
   }
 
   /**
+   * Get fills (FILL activities) for a specific symbol or order
+   * @param symbol - Symbol to filter by (optional)
+   * @param orderId - Order ID to filter by (optional)
+   * @param pageSize - Number of results to return (default: 100)
+   * @returns Array of fill activities
+   */
+  async getFills(params?: {
+    symbol?: string;
+    orderId?: string;
+    pageSize?: number;
+  }): Promise<any[]> {
+    const queryParams = new URLSearchParams();
+    queryParams.append('activity_type', 'FILL');
+    
+    if (params?.symbol) {
+      queryParams.append('symbols', params.symbol);
+    }
+    if (params?.orderId) {
+      queryParams.append('order_id', params.orderId);
+    }
+    if (params?.pageSize) {
+      queryParams.append('page_size', params.pageSize.toString());
+    } else {
+      queryParams.append('page_size', '100');
+    }
+
+    const url = `${this.baseUrl}/v2/account/activities/FILL?${queryParams.toString()}`;
+    const response = await fetch(url, {
+      headers: this.getHeaders(),
+    });
+
+    if (!response.ok) {
+      let errorMessage: string;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || errorData.error || JSON.stringify(errorData);
+      } catch (jsonError) {
+        errorMessage = await response.text();
+      }
+      throw new Error(`Failed to fetch fills: ${errorMessage}`);
+    }
+
+    return response.json();
+  }
+
+  /**
    * Get account portfolio history (equity and P/L over time)
    * @param period - Time period: '1D', '1W', '1M', '3M', '1A', 'all'
    * @param timeframe - Timeframe: '1Min', '5Min', '15Min', '1H', '1D'

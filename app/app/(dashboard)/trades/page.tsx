@@ -41,6 +41,7 @@ export default function TradesPage() {
   const [selectedTrade, setSelectedTrade] = useState<any | null>(null);
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
   const [isClosingAll, setIsClosingAll] = useState(false);
+  const [tradePnL, setTradePnL] = useState<Record<number, number | null>>({});
 
   // Fetch trades with filters
   const { data, isLoading, refetch } = useQuery({
@@ -98,6 +99,38 @@ export default function TradesPage() {
 
   const trades: TradeAuditLog[] = data?.data?.trades || [];
   const pagination = data?.data?.pagination || {};
+
+  // Fetch PnL from Alpaca for each successful trade
+  const { data: pnlData } = useQuery({
+    queryKey: ['trade-pnl', trades.map(t => t.id).join(',')],
+    queryFn: async () => {
+      const pnlPromises = trades
+        .filter(t => t.status === 'success' && t.client_order_id)
+        .map(async (trade) => {
+          try {
+            const response = await fetch(`/api/trades/${trade.id}/pnl`);
+            if (!response.ok) return { tradeId: trade.id, pnl: null };
+            const result = await response.json();
+            return {
+              tradeId: trade.id,
+              pnl: result.success && result.data?.pnl !== null ? result.data.pnl : null,
+            };
+          } catch (error) {
+            return { tradeId: trade.id, pnl: null };
+          }
+        });
+
+      const results = await Promise.all(pnlPromises);
+      const pnlMap: Record<number, number | null> = {};
+      results.forEach(({ tradeId, pnl }) => {
+        pnlMap[tradeId] = pnl;
+      });
+      setTradePnL(pnlMap);
+      return pnlMap;
+    },
+    enabled: trades.length > 0,
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -171,7 +204,14 @@ export default function TradesPage() {
   };
 
   const calculatePNL = (trade: any): number | null => {
-    // Calculate PNL based on price difference between master and client
+    // First, try to use Alpaca-based realized PnL (from fills)
+    // This is the most accurate for closed trades
+    if (tradePnL[trade.id] !== undefined) {
+      return tradePnL[trade.id];
+    }
+
+    // Fallback: Calculate PNL based on price difference between master and client
+    // This measures replication quality, not actual trading PnL
     // PNL = (master_price - client_avg_price) * client_qty
     // Positive PNL means client got a better price (paid less for buy, received more for sell)
     // Negative PNL means client got a worse price
