@@ -105,7 +105,7 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
   };
 
   const calculatePNL = () => {
-    // Priority 1: Use realized PnL from Alpaca fills (most accurate for closed trades)
+    // Priority 1: Use realized PnL from Alpaca fills (FIFO-based, most accurate for sold quantity)
     if (pnlData?.pnl != null) {
       return pnlData.pnl;
     }
@@ -121,17 +121,17 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
     }
     
     // Priority 4: Calculate PNL based on price difference (fallback)
-    // Use Alpaca data if available, otherwise fallback to trade data
-    const entryPrice = alpacaDetails?.entryPrice ?? trade.client_avg_price;
-    const exitPrice = alpacaDetails?.exitPrice ?? trade.master_price;
+    // Use FIFO avgBuyPrice/avgSellPrice if available, otherwise use Alpaca details, then trade data
+    const entryPrice = pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice ?? trade.client_avg_price;
+    const exitPrice = pnlData?.avgSellPrice ?? alpacaDetails?.exitPrice ?? trade.master_price;
     
     // Check for null/undefined explicitly (0 is a valid value)
     if (entryPrice == null || exitPrice == null) {
       return null;
     }
     
-    // Use Alpaca filled qty if available, otherwise fallback to trade data
-    const qty = alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
+    // Use sold qty from FIFO if available, otherwise use Alpaca filled qty, then trade data
+    const qty = pnlData?.soldQty ?? alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
     if (qty == null || qty === 0) {
       return null;
     }
@@ -148,15 +148,16 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
   };
 
   const calculatePNLPercentage = () => {
-    // Use Alpaca data if available, otherwise fallback to trade data
-    const entryPrice = alpacaDetails?.entryPrice ?? trade.client_avg_price;
+    // Use FIFO avgBuyPrice if available (most accurate), otherwise use Alpaca details, then trade data
+    const entryPrice = pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice ?? trade.client_avg_price;
     
     if (entryPrice == null) {
       return null;
     }
     const pnl = calculatePNL();
     if (pnl === null) return null;
-    const filledQty = alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
+    // Use sold qty from FIFO if available, otherwise use Alpaca filled qty, then trade data
+    const filledQty = pnlData?.soldQty ?? alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
     if (filledQty == null || filledQty === 0) return null;
     const costBasis = Number(entryPrice) * filledQty;
     if (costBasis === 0) return null;
@@ -256,9 +257,9 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Entry</div>
                   <div className="flex flex-col text-right">
                     {(() => {
-                      // Use Alpaca data if available (most accurate), otherwise fallback to trade data
-                      const entryPrice = alpacaDetails?.entryPrice ?? trade.client_avg_price;
-                      const filledQty = alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
+                      // Priority: FIFO avgBuyPrice (most accurate), then Alpaca details, then trade data
+                      const entryPrice = pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice ?? trade.client_avg_price;
+                      const filledQty = pnlData?.soldQty ?? alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
                       
                       return entryPrice ? (
                         <>
@@ -286,8 +287,9 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Exit</div>
                   <div className="flex flex-col text-right">
                     {(() => {
-                      // Use Alpaca data if available (most accurate), otherwise fallback to trade data
-                      const exitPrice = alpacaDetails?.exitPrice ?? trade.master_price;
+                      // Priority: FIFO avgSellPrice (most accurate), then Alpaca details, then trade data
+                      const exitPrice = pnlData?.avgSellPrice ?? alpacaDetails?.exitPrice ?? trade.master_price;
+                      const filledQty = pnlData?.soldQty ?? trade.master_qty;
                       
                       return exitPrice ? (
                         <>
@@ -295,14 +297,14 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
                             {formatCurrency(exitPrice)}
                           </div>
                           <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                            × {(trade.master_qty ?? '-').toString()}
+                            × {(filledQty ?? '-').toString()}
                           </div>
                         </>
                       ) : (
                         <>
                           <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">-</div>
                           <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                            × {(trade.master_qty ?? '-').toString()}
+                            × {(filledQty ?? '-').toString()}
                           </div>
                         </>
                       );
