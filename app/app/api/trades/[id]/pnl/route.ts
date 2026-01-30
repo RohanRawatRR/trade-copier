@@ -88,9 +88,10 @@ export async function GET(
 
     // Fetch fills for this symbol
     // We need both buy and sell fills to calculate realized PnL for a closed trade
+    // Alpaca API has a max page size of 100
     const fills = await alpacaClient.getFills({
       symbol: trade.symbol,
-      pageSize: 200, // Get enough fills to find matching pairs
+      pageSize: 100, // Alpaca's maximum page size
     });
 
     // Filter fills for this specific symbol

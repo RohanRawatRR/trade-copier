@@ -63,6 +63,28 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
     retry: false, // Don't retry on error to avoid spamming errors
   });
 
+  // Fetch realized PnL from Alpaca fills when dialog opens (only for successful trades)
+  const { data: pnlData, isLoading: isLoadingPnL } = useQuery({
+    queryKey: ['trade-pnl', trade.id],
+    queryFn: async () => {
+      if (trade.status !== 'success' || !trade.client_order_id) {
+        return null;
+      }
+      const response = await fetch(`/api/trades/${trade.id}/pnl`);
+      if (!response.ok) {
+        return null; // Silently fail - we'll use fallback calculation
+      }
+      const result = await response.json();
+      if (result.success && result.data?.pnl !== null) {
+        return result.data;
+      }
+      return null;
+    },
+    enabled: open && trade.status === 'success' && !!trade.client_order_id,
+    staleTime: 60000, // Cache for 1 minute (PnL doesn't change for closed trades)
+    retry: false,
+  });
+
   // Show error toast when API call fails
   useEffect(() => {
     if (detailsError) {
@@ -83,17 +105,22 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
   };
 
   const calculatePNL = () => {
-    // Use PNL from Alpaca API if available (most accurate)
+    // Priority 1: Use realized PnL from Alpaca fills (most accurate for closed trades)
+    if (pnlData?.pnl != null) {
+      return pnlData.pnl;
+    }
+    
+    // Priority 2: Use PNL from Alpaca details API if available
     if (alpacaDetails?.pnl != null) {
       return alpacaDetails.pnl;
     }
     
-    // Use PNL from trade data if available
+    // Priority 3: Use PNL from trade data if available
     if (typeof trade.pnl === 'number') {
       return trade.pnl;
     }
     
-    // Calculate PNL based on price difference
+    // Priority 4: Calculate PNL based on price difference (fallback)
     // Use Alpaca data if available, otherwise fallback to trade data
     const entryPrice = alpacaDetails?.entryPrice ?? trade.client_avg_price;
     const exitPrice = alpacaDetails?.exitPrice ?? trade.master_price;
