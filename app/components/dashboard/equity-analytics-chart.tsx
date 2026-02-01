@@ -442,7 +442,8 @@ export function EquityAnalyticsChart() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                   {selectedAccountsData.map((account, index) => {
-                    const lastValue = chartData[chartData.length - 1]?.[account.id] || account.equity;
+                    // Use current equity from balances API, not historical chart data
+                    const currentEquity = account.equity || 0;
                     const growthPercent = account.growthPercent || 0;
                     const growth = account.growth || 0;
                     const isPositive = growthPercent >= 0;
@@ -486,7 +487,7 @@ export function EquityAnalyticsChart() {
                                 {account.name}
                               </div>
                               <div className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text text-transparent">
-                                {formatCurrency(Number(lastValue))}
+                                {formatCurrency(Number(currentEquity))}
                               </div>
                             </div>
                           </div>
