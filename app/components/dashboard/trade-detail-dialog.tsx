@@ -136,12 +136,16 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
       return null;
     }
 
-    const priceDiff = Number(exitPrice) - Number(entryPrice);
-    const pnl = priceDiff * qty;
-    
-    // For SELL orders, flip the sign (selling at higher price is better)
-    if (trade.side.toLowerCase() === 'sell') {
-      return -pnl;
+    // Calculate P&L based on position type:
+    // - LONG position (side='sell' to close): profit when exit > entry
+    // - SHORT position (side='buy' to close): profit when entry > exit
+    let pnl: number;
+    if (trade.side.toLowerCase() === 'buy') {
+      // Closing a SHORT position (bought to close)
+      pnl = (Number(entryPrice) - Number(exitPrice)) * qty;
+    } else {
+      // Closing a LONG position (sold to close)
+      pnl = (Number(exitPrice) - Number(entryPrice)) * qty;
     }
     
     return pnl;

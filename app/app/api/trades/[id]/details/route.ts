@@ -189,12 +189,16 @@ export async function GET(
     
     if (entryPrice && exitPrice && orderDetails?.filled_qty) {
       const qty = parseFloat(orderDetails.filled_qty);
-      const priceDiff = parseFloat(exitPrice) - parseFloat(entryPrice);
-      pnl = priceDiff * qty;
       
-      // For sell orders, reverse the sign (selling at higher price than entry is profit)
-      if (trade.side.toLowerCase() === 'sell') {
-        pnl = -pnl;
+      // Calculate P&L based on position type:
+      // - LONG position (side='sell' to close): profit when exit > entry
+      // - SHORT position (side='buy' to close): profit when entry > exit
+      if (trade.side.toLowerCase() === 'buy') {
+        // Closing a SHORT position (bought to close)
+        pnl = (parseFloat(entryPrice) - parseFloat(exitPrice)) * qty;
+      } else {
+        // Closing a LONG position (sold to close)
+        pnl = (parseFloat(exitPrice) - parseFloat(entryPrice)) * qty;
       }
     }
 
