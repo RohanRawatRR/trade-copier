@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Search, RefreshCw, RotateCcw, Check, X, XCircle } from 'lucide-react';
+import { Search, RefreshCw, RotateCcw, Check, X, XCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { TradeAuditLog } from '@/types';
 import { format } from 'date-fns';
 import { AppHeader } from '@/components/dashboard/app-header';
@@ -35,7 +35,8 @@ export default function TradesPage() {
   const { showSuccess, showError } = useToast();
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [symbolFilter, setSymbolFilter] = useState<string>('');
-  const [limit, setLimit] = useState(100);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [retryingTradeId, setRetryingTradeId] = useState<number | null>(null);
   const [retryQuantities, setRetryQuantities] = useState<Record<number, string>>({});
   const [selectedTrade, setSelectedTrade] = useState<any | null>(null);
@@ -44,10 +45,12 @@ export default function TradesPage() {
 
   // Fetch trades with filters
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['trades', statusFilter, symbolFilter, limit],
+    queryKey: ['trades', statusFilter, symbolFilter, page, pageSize],
     queryFn: async () => {
+      const offset = (page - 1) * pageSize;
       const params = new URLSearchParams({
-        limit: limit.toString(),
+        limit: pageSize.toString(),
+        offset: offset.toString(),
       });
       if (statusFilter !== 'all') params.append('status', statusFilter);
       if (symbolFilter) params.append('symbol', symbolFilter.toUpperCase());
@@ -58,6 +61,13 @@ export default function TradesPage() {
     },
     refetchInterval: 10000, // Refresh every 10 seconds
   });
+
+  // Reset to page 1 when filters change
+  const handleFilterChange = (filterType: 'status' | 'symbol', value: string) => {
+    setPage(1);
+    if (filterType === 'status') setStatusFilter(value);
+    if (filterType === 'symbol') setSymbolFilter(value);
+  };
 
   // Retry trade mutation
   const retryTradeMutation = useMutation({
@@ -98,6 +108,7 @@ export default function TradesPage() {
 
   const trades: TradeAuditLog[] = data?.data?.trades || [];
   const pagination = data?.data?.pagination || {};
+  const totalPages = Math.ceil((pagination.total || 0) / pageSize);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -239,7 +250,7 @@ export default function TradesPage() {
                 </Button>
 
                 {/* Status Filter */}
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select value={statusFilter} onValueChange={(value) => handleFilterChange('status', value)}>
                   <SelectTrigger className="w-[140px]">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
@@ -257,7 +268,7 @@ export default function TradesPage() {
                   <Input
                     placeholder="Filter by symbol..."
                     value={symbolFilter}
-                    onChange={(e) => setSymbolFilter(e.target.value)}
+                    onChange={(e) => handleFilterChange('symbol', e.target.value)}
                     className="pl-8"
                   />
                 </div>
@@ -469,10 +480,120 @@ export default function TradesPage() {
                   </TableBody>
                 </Table>
 
-                {/* Pagination Info */}
-                <div className="mt-4 text-sm text-muted-foreground text-center">
-                  Showing {trades.length} of {pagination.total} trades
-                  {pagination.hasMore && ' (Load more feature coming soon)'}
+                {/* Pagination Controls */}
+                <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                  {/* Page Size Selector */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Rows per page:</span>
+                    <Select
+                      value={pageSize.toString()}
+                      onValueChange={(value) => {
+                        setPageSize(parseInt(value));
+                        setPage(1);
+                      }}
+                    >
+                      <SelectTrigger className="w-[70px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="10">10</SelectItem>
+                        <SelectItem value="25">25</SelectItem>
+                        <SelectItem value="50">50</SelectItem>
+                        <SelectItem value="100">100</SelectItem>
+                        <SelectItem value="200">200</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Pagination Info */}
+                  <div className="text-sm text-muted-foreground">
+                    Showing {pagination.offset + 1}-{Math.min(pagination.offset + pageSize, pagination.total)} of{' '}
+                    {pagination.total} trades
+                  </div>
+
+                  {/* Pagination Buttons */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage(page - 1)}
+                      disabled={page === 1 || isLoading}
+                    >
+                      <ChevronLeft className="h-4 w-4 mr-1" />
+                      Previous
+                    </Button>
+                    
+                    {/* Page Numbers */}
+                    <div className="flex items-center gap-1">
+                      {page > 2 && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPage(1)}
+                            className="w-9 h-9 p-0"
+                          >
+                            1
+                          </Button>
+                          {page > 3 && <span className="text-muted-foreground">...</span>}
+                        </>
+                      )}
+                      
+                      {page > 1 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPage(page - 1)}
+                          className="w-9 h-9 p-0"
+                        >
+                          {page - 1}
+                        </Button>
+                      )}
+                      
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="w-9 h-9 p-0"
+                      >
+                        {page}
+                      </Button>
+                      
+                      {page < totalPages && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPage(page + 1)}
+                          className="w-9 h-9 p-0"
+                        >
+                          {page + 1}
+                        </Button>
+                      )}
+                      
+                      {page < totalPages - 1 && (
+                        <>
+                          {page < totalPages - 2 && <span className="text-muted-foreground">...</span>}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setPage(totalPages)}
+                            className="w-9 h-9 p-0"
+                          >
+                            {totalPages}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage(page + 1)}
+                      disabled={page >= totalPages || isLoading}
+                    >
+                      Next
+                      <ChevronRight className="h-4 w-4 ml-1" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
