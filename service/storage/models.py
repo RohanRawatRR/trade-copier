@@ -70,6 +70,8 @@ class ClientAccount(Base):
     # Scaling configuration (per-client overrides)
     scaling_method = Column(String(50), nullable=True)  # None = use global default
     scaling_multiplier = Column(Float, nullable=True)
+    risk_multiplier = Column(Float, default=1.0, nullable=False)  # Risk scaling: 0.5 = 50%, 1.5 = 150% (margin)
+    trade_direction = Column(String(20), default="both", nullable=False)  # Trade filter: "long", "short", or "both"
     
     # Audit fields
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

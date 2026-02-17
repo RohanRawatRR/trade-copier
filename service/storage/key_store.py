@@ -229,6 +229,8 @@ class KeyStore:
                     "email": account.email,
                     "scaling_method": account.scaling_method,
                     "scaling_multiplier": account.scaling_multiplier,
+                    "risk_multiplier": getattr(account, 'risk_multiplier', 1.0),
+                    "trade_direction": getattr(account, 'trade_direction', "both"),
                 })
             
             logger.info("active_clients_retrieved", count=len(clients))

@@ -21,6 +21,8 @@ export async function GET() {
           account_name: true,
           email: true,
           is_active: true,
+          risk_multiplier: true,
+          trade_direction: true,
           // Skip datetime fields if they cause errors
           // created_at: true,
           // updated_at: true,

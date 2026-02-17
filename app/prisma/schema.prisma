@@ -47,6 +47,8 @@ model ClientAccount {
   last_failure_time     DateTime?
   scaling_method        String?
   scaling_multiplier    Float?
+  risk_multiplier       Float     @default(1.0) // Risk scaling: 0.5 = 50% of equity, 1.5 = 150% (margin)
+  trade_direction       String    @default("both") // Trade filter: "long", "short", or "both"
   created_at            DateTime
   updated_at            DateTime  @updatedAt
   last_successful_trade DateTime?

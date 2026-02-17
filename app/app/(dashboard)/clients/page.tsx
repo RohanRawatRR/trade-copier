@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Plus, Trash2, Edit, Upload, FileText, CheckCircle2, XCircle, AlertCircle, Download } from 'lucide-react';
+import { Plus, Trash2, Edit, Upload, FileText, CheckCircle2, XCircle, AlertCircle, Download, TrendingUp, ArrowUpDown } from 'lucide-react';
 import { ClientAccount } from '@/types';
 import { AppHeader } from '@/components/dashboard/app-header';
 import { useToast } from '@/components/providers/toast-provider';
@@ -38,6 +38,10 @@ export default function ClientsPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [editingClient, setEditingClient] = useState<ClientAccount | null>(null);
+  const [riskMultiplierClient, setRiskMultiplierClient] = useState<ClientAccount | null>(null);
+  const [riskMultiplierValue, setRiskMultiplierValue] = useState<number>(1.0);
+  const [tradeDirectionClient, setTradeDirectionClient] = useState<ClientAccount | null>(null);
+  const [tradeDirectionValue, setTradeDirectionValue] = useState<string>('both');
   const [formData, setFormData] = useState({
     account_id: '',
     account_name: '',
@@ -79,6 +83,63 @@ export default function ClientsPage() {
     },
     onError: (error: Error) => {
       showError(error.message || 'Failed to add client', 'Error');
+    },
+  });
+
+  // Update trade direction mutation
+  const updateTradeDirectionMutation = useMutation({
+    mutationFn: async ({ accountId, tradeDirection }: { accountId: string; tradeDirection: string }) => {
+      const response = await fetch(`/api/clients/${accountId}/trade-direction`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trade_direction: tradeDirection }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to update trade direction');
+      }
+      return response.json();
+    },
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries({ queryKey: ['clients'] });
+      await queryClient.refetchQueries({ queryKey: ['clients'] });
+      setTradeDirectionClient(null);
+      showSuccess(
+        `Trade direction updated to ${data.data.trade_direction}`,
+        'Trade Direction Updated'
+      );
+    },
+    onError: (error: Error) => {
+      showError(error.message || 'Failed to update trade direction', 'Error');
+    },
+  });
+
+  // Update risk multiplier mutation
+  const updateRiskMultiplierMutation = useMutation({
+    mutationFn: async ({ accountId, riskMultiplier }: { accountId: string; riskMultiplier: number }) => {
+      const response = await fetch(`/api/clients/${accountId}/risk-multiplier`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ risk_multiplier: riskMultiplier }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to update risk multiplier');
+      }
+      return response.json();
+    },
+    onSuccess: async (data) => {
+      // Invalidate and refetch clients data
+      await queryClient.invalidateQueries({ queryKey: ['clients'] });
+      await queryClient.refetchQueries({ queryKey: ['clients'] });
+      setRiskMultiplierClient(null);
+      showSuccess(
+        `Risk multiplier updated to ${data.data.risk_multiplier}x`,
+        'Risk Multiplier Updated'
+      );
+    },
+    onError: (error: Error) => {
+      showError(error.message || 'Failed to update risk multiplier', 'Error');
     },
   });
 
@@ -290,6 +351,8 @@ export default function ClientsPage() {
                     <TableHead>Account ID</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Email</TableHead>
+                    <TableHead>Direction</TableHead>
+                    <TableHead>Risk</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -303,6 +366,34 @@ export default function ClientsPage() {
                       </TableCell>
                       <TableCell>{client.account_name || '-'}</TableCell>
                       <TableCell>{client.email || '-'}</TableCell>
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setTradeDirectionClient(client);
+                            setTradeDirectionValue(client.trade_direction || 'both');
+                          }}
+                          className="h-8 gap-1"
+                        >
+                          <ArrowUpDown className="h-3 w-3" />
+                          {client.trade_direction === 'long' ? 'Long' : client.trade_direction === 'short' ? 'Short' : 'Both'}
+                        </Button>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setRiskMultiplierClient(client);
+                            setRiskMultiplierValue(client.risk_multiplier || 1.0);
+                          }}
+                          className="h-8 gap-1"
+                        >
+                          <TrendingUp className="h-3 w-3" />
+                          {(client.risk_multiplier || 1.0).toFixed(1)}x
+                        </Button>
+                      </TableCell>
                       <TableCell>
                         <Badge variant={client.is_active ? 'default' : 'secondary'}>
                           {client.is_active ? 'Active' : 'Inactive'}
@@ -599,6 +690,248 @@ export default function ClientsPage() {
                   Upload
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Risk Multiplier Dialog */}
+      <Dialog open={!!riskMultiplierClient} onOpenChange={(open) => !open && setRiskMultiplierClient(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Adjust Risk Multiplier</DialogTitle>
+            <DialogDescription>
+              Control position sizing for {riskMultiplierClient?.account_name || riskMultiplierClient?.account_id}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* Risk Multiplier Slider */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="risk-multiplier" className="text-base font-semibold">
+                  Risk Multiplier
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="risk-multiplier-input"
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="3.0"
+                    value={riskMultiplierValue}
+                    onChange={(e) => setRiskMultiplierValue(parseFloat(e.target.value) || 1.0)}
+                    className="w-20 text-center font-bold"
+                  />
+                  <span className="text-sm font-medium">x</span>
+                </div>
+              </div>
+              
+              <input
+                id="risk-multiplier"
+                type="range"
+                min="0.1"
+                max="3.0"
+                step="0.1"
+                value={riskMultiplierValue}
+                onChange={(e) => setRiskMultiplierValue(parseFloat(e.target.value))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+              />
+              
+              {/* Quick Presets */}
+              <div className="flex gap-2 flex-wrap">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRiskMultiplierValue(0.5)}
+                >
+                  0.5x (Conservative)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRiskMultiplierValue(1.0)}
+                >
+                  1.0x (Normal)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRiskMultiplierValue(1.5)}
+                >
+                  1.5x (Aggressive)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRiskMultiplierValue(2.0)}
+                >
+                  2.0x (2x Leverage)
+                </Button>
+              </div>
+            </div>
+
+            {/* Explanation */}
+            <div className="bg-muted p-4 rounded-lg space-y-2">
+              <p className="text-sm font-medium">How it works:</p>
+              <ul className="text-sm text-muted-foreground space-y-1">
+                <li>• <strong>1.0x</strong> = Normal (100% of equity-based calculation)</li>
+                <li>• <strong>0.5x</strong> = Conservative (50% of equity)</li>
+                <li>• <strong>1.5x</strong> = Aggressive (150% of equity, using margin)</li>
+              </ul>
+              <p className="text-xs text-muted-foreground mt-2">
+                Example: If master uses 10% of equity, and you set 0.5x, client will use 5% of equity.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRiskMultiplierClient(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (riskMultiplierClient) {
+                  updateRiskMultiplierMutation.mutate({
+                    accountId: riskMultiplierClient.account_id,
+                    riskMultiplier: riskMultiplierValue,
+                  });
+                }
+              }}
+              disabled={updateRiskMultiplierMutation.isPending}
+            >
+              {updateRiskMultiplierMutation.isPending ? 'Updating...' : 'Update Risk Multiplier'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Trade Direction Dialog */}
+      <Dialog open={!!tradeDirectionClient} onOpenChange={(open) => !open && setTradeDirectionClient(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Trade Direction Filter</DialogTitle>
+            <DialogDescription>
+              Choose which trades to replicate for {tradeDirectionClient?.account_name || tradeDirectionClient?.account_id}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* Trade Direction Options */}
+            <div className="space-y-4">
+              <Label className="text-base font-semibold">Select Trade Direction</Label>
+              
+              <div className="grid gap-3">
+                {/* Both Option */}
+                <button
+                  type="button"
+                  onClick={() => setTradeDirectionValue('both')}
+                  className={`flex items-start gap-3 p-4 rounded-lg border-2 transition-all ${
+                    tradeDirectionValue === 'both'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                  }`}
+                >
+                  <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center ${
+                    tradeDirectionValue === 'both' ? 'border-primary' : 'border-gray-300'
+                  }`}>
+                    {tradeDirectionValue === 'both' && (
+                      <div className="h-2.5 w-2.5 rounded-full bg-primary" />
+                    )}
+                  </div>
+                  <div className="flex-1 text-left">
+                    <div className="font-semibold">Both (Long & Short)</div>
+                    <div className="text-sm text-muted-foreground">
+                      Replicate all trades - both long and short positions
+                    </div>
+                  </div>
+                </button>
+
+                {/* Long Only Option */}
+                <button
+                  type="button"
+                  onClick={() => setTradeDirectionValue('long')}
+                  className={`flex items-start gap-3 p-4 rounded-lg border-2 transition-all ${
+                    tradeDirectionValue === 'long'
+                      ? 'border-green-500 bg-green-500/5'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                  }`}
+                >
+                  <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center ${
+                    tradeDirectionValue === 'long' ? 'border-green-500' : 'border-gray-300'
+                  }`}>
+                    {tradeDirectionValue === 'long' && (
+                      <div className="h-2.5 w-2.5 rounded-full bg-green-500" />
+                    )}
+                  </div>
+                  <div className="flex-1 text-left">
+                    <div className="font-semibold text-green-600 dark:text-green-400">Long Only</div>
+                    <div className="text-sm text-muted-foreground">
+                      Only replicate long positions (buy to open, sell to close)
+                    </div>
+                  </div>
+                </button>
+
+                {/* Short Only Option */}
+                <button
+                  type="button"
+                  onClick={() => setTradeDirectionValue('short')}
+                  className={`flex items-start gap-3 p-4 rounded-lg border-2 transition-all ${
+                    tradeDirectionValue === 'short'
+                      ? 'border-red-500 bg-red-500/5'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                  }`}
+                >
+                  <div className={`mt-0.5 h-5 w-5 rounded-full border-2 flex items-center justify-center ${
+                    tradeDirectionValue === 'short' ? 'border-red-500' : 'border-gray-300'
+                  }`}>
+                    {tradeDirectionValue === 'short' && (
+                      <div className="h-2.5 w-2.5 rounded-full bg-red-500" />
+                    )}
+                  </div>
+                  <div className="flex-1 text-left">
+                    <div className="font-semibold text-red-600 dark:text-red-400">Short Only</div>
+                    <div className="text-sm text-muted-foreground">
+                      Only replicate short positions (sell to open, buy to close)
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Info Box */}
+            <div className="bg-muted p-4 rounded-lg space-y-2">
+              <p className="text-sm font-medium">How it works:</p>
+              <ul className="text-sm text-muted-foreground space-y-1">
+                <li>• <strong>Both:</strong> Replicates all master trades (default)</li>
+                <li>• <strong>Long Only:</strong> Skips short trades, only follows long positions</li>
+                <li>• <strong>Short Only:</strong> Skips long trades, only follows short positions</li>
+              </ul>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setTradeDirectionClient(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (tradeDirectionClient) {
+                  updateTradeDirectionMutation.mutate({
+                    accountId: tradeDirectionClient.account_id,
+                    tradeDirection: tradeDirectionValue,
+                  });
+                }
+              }}
+              disabled={updateTradeDirectionMutation.isPending}
+            >
+              {updateTradeDirectionMutation.isPending ? 'Updating...' : 'Update Trade Direction'}
             </Button>
           </DialogFooter>
         </DialogContent>

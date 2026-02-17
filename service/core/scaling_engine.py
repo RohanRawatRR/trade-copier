@@ -160,6 +160,52 @@ class ScalingEngine:
             except Exception:
                 # If get_open_position fails, it usually means position is 0
                 master_remaining = 0.0
+            
+            # Filter trades based on client's trade_direction preference
+            trade_direction_filter = client_account.get("trade_direction", "both")
+            if trade_direction_filter != "both":
+                # Determine if this is a long or short trade based on the master's final position
+                # Long trade: Master is buying (opening/adding to long) or has/will have positive position
+                # Short trade: Master is selling (opening/adding to short) or has/will have negative position
+                is_long_trade = False
+                is_short_trade = False
+                
+                if side.lower() == "buy":
+                    # Buying could be: opening long, adding to long, or closing short
+                    if master_remaining >= 0:  # Master has long position or will have after this trade
+                        is_long_trade = True
+                    else:  # Master has short position, this is closing short
+                        is_short_trade = True
+                elif side.lower() == "sell":
+                    # Selling could be: opening short, adding to short, or closing long
+                    if master_remaining <= 0:  # Master has short position or will have after this trade
+                        is_short_trade = True
+                    else:  # Master has long position, this is closing long
+                        is_long_trade = True
+                
+                # Skip trade if it doesn't match client's preference
+                if trade_direction_filter == "long" and not is_long_trade:
+                    logger.info(
+                        "trade_filtered_by_direction",
+                        client_account_id=client_account["account_id"],
+                        symbol=symbol,
+                        side=side,
+                        trade_direction_filter=trade_direction_filter,
+                        master_remaining=master_remaining,
+                        message=f"Client only accepts LONG trades. Skipping this SHORT trade."
+                    )
+                    return None
+                elif trade_direction_filter == "short" and not is_short_trade:
+                    logger.info(
+                        "trade_filtered_by_direction",
+                        client_account_id=client_account["account_id"],
+                        symbol=symbol,
+                        side=side,
+                        trade_direction_filter=trade_direction_filter,
+                        master_remaining=master_remaining,
+                        message=f"Client only accepts SHORT trades. Skipping this LONG trade."
+                    )
+                    return None
 
             # --- SMART REPLICATION LOGIC (CLEAN SWEEPS) ---
             
@@ -291,9 +337,12 @@ class ScalingEngine:
                     return None
 
             # CASE 2: NORMAL PROPORTIONAL REPLICATION
+            # Get risk multiplier from client account config (default to 1.0)
+            risk_multiplier = client_account.get("risk_multiplier", 1.0)
+            
             if side.lower() == "sell":
                 # Calculate Proportional Quantity
-                scaled_qty = self._equity_based_scaling(master_qty, client_equity, self.master_equity)
+                scaled_qty = self._equity_based_scaling(master_qty, client_equity, self.master_equity, risk_multiplier)
                 
                 # Handle Shorting vs Closing
                 # Rule: Alpaca does NOT allow fractional short-selling.
@@ -325,7 +374,7 @@ class ScalingEngine:
                     return final_scaled_qty
             else:
                 # Standard Buy Logic
-                scaled_qty = self._equity_based_scaling(master_qty, client_equity, self.master_equity)
+                scaled_qty = self._equity_based_scaling(master_qty, client_equity, self.master_equity, risk_multiplier)
             # -----------------------------------------------
             
             # Calculate percentage of account used by master
@@ -438,27 +487,32 @@ class ScalingEngine:
         self,
         master_qty: float,
         client_equity: float,
-        master_equity: float
+        master_equity: float,
+        risk_multiplier: float = 1.0
     ) -> float:
         """
-        Scale quantity based on equity ratio (proportional to account size).
+        Scale quantity based on equity ratio (proportional to account size) with risk adjustment.
         
-        Formula: client_qty = master_qty × (client_equity / master_equity)
+        Formula: client_qty = master_qty × (client_equity / master_equity) × risk_multiplier
         
-        This maintains the same % of equity usage across all accounts.
-        If master uses 90% of equity, client also uses 90% of equity.
+        This maintains the same % of equity usage across all accounts, then applies risk scaling:
+        - risk_multiplier = 1.0: Normal scaling (default)
+        - risk_multiplier = 0.5: Use 50% of equity (conservative)
+        - risk_multiplier = 1.5: Use 150% of equity (margin/aggressive)
         
         Example:
         - Master has $100k equity, buys 900 shares @ $100 = $90k (90% of equity)
         - Client has $10k equity (10% size of master)
-        - Client buys: 900 × (10k / 100k) = 90 shares @ $100 = $9k (also 90% of equity)
+        - Base scaling: 900 × (10k / 100k) = 90 shares
+        - With 0.5x risk: 90 × 0.5 = 45 shares @ $100 = $4.5k (45% of equity)
+        - With 1.5x risk: 90 × 1.5 = 135 shares @ $100 = $13.5k (135% of equity, using margin)
         """
         if master_equity <= 0:
             logger.error("invalid_master_equity", master_equity=master_equity)
             return 0.0
         
         ratio = client_equity / master_equity
-        scaled_qty = master_qty * ratio
+        scaled_qty = master_qty * ratio * risk_multiplier
         
         return scaled_qty
     
