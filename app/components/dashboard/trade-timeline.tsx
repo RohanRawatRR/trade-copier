@@ -22,6 +22,43 @@ export function TradeTimeline({ limit = 10 }: { limit?: number }) {
 
   const trades: TradeAuditLog[] = data?.data?.trades || [];
 
+  function PriceRow({ trade }: { trade: any }) {
+    const enabled = trade.status === 'success' && (trade.side === 'sell' || trade.side === 'buy');
+    const { data: details } = useQuery({
+      queryKey: ['trade-details-inline', trade.id],
+      queryFn: async () => {
+        const res = await fetch(`/api/trades/${trade.id}/details`);
+        if (!res.ok) return null;
+        const json = await res.json();
+        return json?.data || null;
+      },
+      enabled,
+      staleTime: 15000,
+    });
+
+    if (!details) return null;
+
+    const entry = details.entryPrice;
+    const exit = details.exitPrice;
+    const intent = details.positionIntent as string | null;
+    const isShortClose = intent === 'buy_to_close';
+    const isLongClose = intent === 'sell_to_close' || (!intent && trade.side === 'sell');
+
+    // Show only on SELL for long closes and BUY for short covers
+    const shouldShow = (trade.side === 'sell' && isLongClose) || (trade.side === 'buy' && isShortClose);
+    if (!shouldShow || (entry == null && exit == null)) return null;
+
+    const fmt = (n: number | null | undefined) =>
+      n == null ? '-' : `$${Number(n).toFixed(2)}`;
+
+    return (
+      <div className="text-xs text-muted-foreground">
+        Entry: <span className="text-foreground font-medium">{fmt(entry)}</span>
+        {' '}• Exit: <span className="text-foreground font-medium">{fmt(exit)}</span>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <Card>
@@ -115,6 +152,8 @@ export function TradeTimeline({ limit = 10 }: { limit?: number }) {
                         Latency: {trade.replication_latency_ms}ms
                       </div>
                     )}
+                    {/* Entry/Exit from Alpaca for closes/covers */}
+                    <PriceRow trade={trade} />
                     {trade.error_message && (
                       <div className="text-xs text-red-500 mt-1">
                         Error: {trade.error_message}
@@ -135,4 +174,3 @@ export function TradeTimeline({ limit = 10 }: { limit?: number }) {
     </Card>
   );
 }
-

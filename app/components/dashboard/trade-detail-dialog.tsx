@@ -80,7 +80,7 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
       }
       return null;
     },
-    enabled: open && trade.status === 'success' && !!trade.client_order_id,
+    enabled: open && trade.status === 'success',
     staleTime: 60000, // Cache for 1 minute (PnL doesn't change for closed trades)
     retry: false,
   });
@@ -105,63 +105,40 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
   };
 
   const calculatePNL = () => {
-    // Priority 1: Use realized PnL from Alpaca fills (FIFO-based, most accurate for sold quantity)
-    if (pnlData?.pnl != null) {
-      return pnlData.pnl;
-    }
-    
-    // Priority 2: Use PNL from Alpaca details API if available
-    if (alpacaDetails?.pnl != null) {
-      return alpacaDetails.pnl;
-    }
-    
-    // Priority 3: Use PNL from trade data if available
-    if (typeof trade.pnl === 'number') {
-      return trade.pnl;
-    }
-    
-    // Priority 4: Calculate PNL based on price difference (fallback)
-    // Use FIFO avgBuyPrice/avgSellPrice if available, otherwise use Alpaca details, then trade data
-    const entryPrice = pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice ?? trade.client_avg_price;
-    const exitPrice = pnlData?.avgSellPrice ?? alpacaDetails?.exitPrice ?? trade.master_price;
-    
-    // Check for null/undefined explicitly (0 is a valid value)
-    if (entryPrice == null || exitPrice == null) {
-      return null;
-    }
-    
-    // Use sold qty from FIFO if available, otherwise use Alpaca filled qty, then trade data
-    const qty = pnlData?.soldQty ?? alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
-    if (qty == null || qty === 0) {
-      return null;
-    }
+    // Prefer realized PnL derived from fills
+    if (pnlData?.pnl != null) return pnlData.pnl;
+    if (alpacaDetails?.pnl != null) return alpacaDetails.pnl;
 
-    // Calculate P&L based on position type:
-    // - LONG position (side='sell' to close): profit when exit > entry
-    // - SHORT position (side='buy' to close): profit when entry > exit
-    let pnl: number;
-    if (trade.side.toLowerCase() === 'buy') {
-      // Closing a SHORT position (bought to close)
-      pnl = (Number(entryPrice) - Number(exitPrice)) * qty;
-    } else {
-      // Closing a LONG position (sold to close)
-      pnl = (Number(exitPrice) - Number(entryPrice)) * qty;
-    }
-    
-    return pnl;
+    // Determine if this dialog represents closing a short vs long
+    const isShortClose = (alpacaDetails?.positionIntent === 'buy_to_close') || (trade.side.toLowerCase() === 'buy');
+
+    // Map entry/exit based on position direction
+    const entryPrice = (isShortClose
+      ? (pnlData?.avgSellPrice ?? alpacaDetails?.entryPrice)
+      : (pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice));
+    const exitPrice = (isShortClose
+      ? (pnlData?.avgBuyPrice ?? alpacaDetails?.exitPrice)
+      : (pnlData?.avgSellPrice ?? alpacaDetails?.exitPrice));
+
+    if (entryPrice == null || exitPrice == null) return null;
+
+    const qty = pnlData?.soldQty ?? alpacaDetails?.filledQty;
+    if (qty == null || qty === 0) return null;
+
+    return isShortClose
+      ? (Number(entryPrice) - Number(exitPrice)) * qty // short cover
+      : (Number(exitPrice) - Number(entryPrice)) * qty; // long close
   };
 
   const calculatePNLPercentage = () => {
-    // Use FIFO avgBuyPrice if available (most accurate), otherwise use Alpaca details, then trade data
-    const entryPrice = pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice ?? trade.client_avg_price;
-    
-    if (entryPrice == null) {
-      return null;
-    }
+    const isShortClose = (alpacaDetails?.positionIntent === 'buy_to_close') || (trade.side.toLowerCase() === 'buy');
+    const entryPrice = isShortClose
+      ? (pnlData?.avgSellPrice ?? alpacaDetails?.entryPrice)
+      : (pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice);
+    if (entryPrice == null) return null;
     const pnl = calculatePNL();
     if (pnl === null) return null;
-    // Use sold qty from FIFO if available, otherwise use Alpaca filled qty, then trade data
-    const filledQty = pnlData?.soldQty ?? alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
+    const filledQty = pnlData?.soldQty ?? alpacaDetails?.filledQty;
     if (filledQty == null || filledQty === 0) return null;
     const costBasis = Number(entryPrice) * filledQty;
     if (costBasis === 0) return null;
@@ -172,6 +149,18 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
   const pnlPercentage = calculatePNLPercentage();
   const isPositive = pnl !== null && pnl >= 0;
   const isBuy = trade.side.toLowerCase() === 'buy';
+
+  // Entry/Exit display logic
+  // Show prices only when the trade is effectively closed (both entry and exit available from Alpaca data)
+  const isShortCloseForDisplay = (alpacaDetails?.positionIntent === 'buy_to_close') || (trade.side.toLowerCase() === 'buy');
+  const entryPriceDisplay = (isShortCloseForDisplay
+    ? (pnlData?.avgSellPrice ?? alpacaDetails?.entryPrice)
+    : (pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice)) ?? null;
+  const exitPriceDisplay = (isShortCloseForDisplay
+    ? (pnlData?.avgBuyPrice ?? alpacaDetails?.exitPrice)
+    : (pnlData?.avgSellPrice ?? alpacaDetails?.exitPrice)) ?? null;
+  const filledQtyDisplay = (pnlData?.soldQty ?? alpacaDetails?.filledQty) ?? null;
+  const showPrices = entryPriceDisplay != null && exitPriceDisplay != null;
 
   const tradeDate = trade.replication_started_at 
     ? new Date(trade.replication_started_at)
@@ -230,8 +219,8 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
               )}
             </div>
 
-            {/* Middle Row: PNL (left) and Percentage (right) - Only show for sell trades when PNL can be calculated */}
-            {!isBuy && pnl !== null && (
+            {/* Middle Row: PNL (left) and Percentage (right) - show when PNL can be calculated (close or cover) */}
+            {pnl !== null && (
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2.5">
                   <div className={`p-1.5 rounded-lg ${isPositive ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
@@ -253,36 +242,23 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
               </div>
             )}
 
-            {/* Bottom Section: Entry and Exit - Only show for sell trades */}
-            {!isBuy && (
+            {/* Bottom Section: Entry and Exit - only when trade is closed (both prices available) */}
+            {showPrices && (
               <div className="space-y-4 pt-4 border-t border-border/40">
                 {/* Entry Row */}
                 <div className="flex items-start justify-between">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Entry</div>
                   <div className="flex flex-col text-right">
-                    {(() => {
-                      // Priority: FIFO avgBuyPrice (most accurate), then Alpaca details, then trade data
-                      const entryPrice = pnlData?.avgBuyPrice ?? alpacaDetails?.entryPrice ?? trade.client_avg_price;
-                      const filledQty = pnlData?.soldQty ?? alpacaDetails?.filledQty ?? trade.client_filled_qty ?? trade.client_qty;
-                      
-                      return entryPrice ? (
-                        <>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
-                            {formatCurrency(entryPrice)}
-                          </div>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                            × {(filledQty ?? '-').toString()}
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">-</div>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                            × {(filledQty ?? '-').toString()}
-                          </div>
-                        </>
-                      );
-                    })()}
+                    <>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
+                        {formatCurrency(entryPriceDisplay as number)}
+                      </div>
+                      {filledQtyDisplay != null && (
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
+                          × {filledQtyDisplay.toString()}
+                        </div>
+                      )}
+                    </>
                   </div>
                 </div>
                 
@@ -290,29 +266,16 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
                 <div className="flex items-start justify-between">
                   <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Exit</div>
                   <div className="flex flex-col text-right">
-                    {(() => {
-                      // Priority: FIFO avgSellPrice (most accurate), then Alpaca details, then trade data
-                      const exitPrice = pnlData?.avgSellPrice ?? alpacaDetails?.exitPrice ?? trade.master_price;
-                      const filledQty = pnlData?.soldQty ?? trade.master_qty;
-                      
-                      return exitPrice ? (
-                        <>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
-                            {formatCurrency(exitPrice)}
-                          </div>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                            × {(filledQty ?? '-').toString()}
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">-</div>
-                          <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
-                            × {(filledQty ?? '-').toString()}
-                          </div>
-                        </>
-                      );
-                    })()}
+                    <>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">
+                        {formatCurrency(exitPriceDisplay as number)}
+                      </div>
+                      {filledQtyDisplay != null && (
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mt-1 font-medium">
+                          × {filledQtyDisplay.toString()}
+                        </div>
+                      )}
+                    </>
                   </div>
                 </div>
               </div>
@@ -339,16 +302,16 @@ export function TradeDetailDialog({ trade, open, onOpenChange }: TradeDetailDial
                 <div className="font-mono text-xs text-foreground/80">{trade.client_order_id}</div>
               </div>
             )}
-            {trade.master_price && (
+            {showPrices && entryPriceDisplay != null && (
               <div className="space-y-1">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Master Price</div>
-                <div className="text-sm font-semibold text-foreground">{formatCurrency(trade.master_price)}</div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Client Entry Avg</div>
+                <div className="text-sm font-semibold text-foreground">{formatCurrency(entryPriceDisplay as number)}</div>
               </div>
             )}
-            {trade.client_avg_price && (
+            {showPrices && exitPriceDisplay != null && (
               <div className="space-y-1">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Client Avg Price</div>
-                <div className="text-sm font-semibold text-foreground">{formatCurrency(trade.client_avg_price)}</div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 font-medium">Client Filled Avg</div>
+                <div className="text-sm font-semibold text-foreground">{formatCurrency(exitPriceDisplay as number)}</div>
               </div>
             )}
           </div>

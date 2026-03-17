@@ -216,6 +216,8 @@ export async function GET(
         exitPrice: exitPrice ? parseFloat(exitPrice) : null,
         pnl,
         filledQty: orderDetails?.filled_qty ? parseFloat(orderDetails.filled_qty) : null,
+        positionIntent,
+        isClosing: isShortClose || isLongClose,
       },
     });
   } catch (error: any) {

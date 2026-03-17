@@ -42,6 +42,8 @@ export default function TradesPage() {
   const [selectedTrade, setSelectedTrade] = useState<any | null>(null);
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
   const [isClosingAll, setIsClosingAll] = useState(false);
+  const [fetchingFillId, setFetchingFillId] = useState<number | null>(null);
+  const [fillPrices, setFillPrices] = useState<Record<number, number>>({});
 
   // Fetch trades with filters
   const { data, isLoading, refetch } = useQuery({
@@ -123,6 +125,27 @@ export default function TradesPage() {
     }
   };
 
+  const fetchClientFillPrice = async (trade: any) => {
+    if (!trade || trade.status !== 'success' || !trade.client_order_id) return;
+    try {
+      setFetchingFillId(trade.id);
+      const res = await fetch(`/api/trades/${trade.id}/details`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || 'Failed to fetch fill price');
+      }
+      const json = await res.json();
+      const price = json?.data?.exitPrice ?? json?.data?.order?.filled_avg_price;
+      if (price != null) {
+        setFillPrices((prev) => ({ ...prev, [trade.id]: Number(price) }));
+      }
+    } catch (e) {
+      // Silent fail in table; detailed info available in dialog
+    } finally {
+      setFetchingFillId(null);
+    }
+  };
+
   const handleRetryClick = (trade: any) => {
     setRetryingTradeId(trade.id);
     setRetryQuantities({
@@ -181,37 +204,8 @@ export default function TradesPage() {
     retryTradeMutation.mutate({ trade, qty: parseFloat(retryQuantities[trade.id] || '0') });
   };
 
-  const calculatePNL = (trade: any): number | null => {
-    // Calculate PNL based on price difference between master and client
-    // This measures replication quality, not actual trading PnL
-    // PNL = (master_price - client_avg_price) * client_qty
-    // Positive PNL means client got a better price (paid less for buy, received more for sell)
-    // Negative PNL means client got a worse price
-    // Note: For accurate realized PnL, see the trade detail dialog which fetches from Alpaca
-    
-    if (!trade.client_avg_price || !trade.master_price || !trade.client_qty) {
-      return null;
-    }
-
-    const priceDiff = trade.master_price - trade.client_avg_price;
-    const pnl = priceDiff * trade.client_qty;
-    
-    // For SELL orders, flip the sign (selling at higher price is better)
-    if (trade.side.toLowerCase() === 'sell') {
-      return -pnl;
-    }
-    
-    return pnl;
-  };
-
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value);
-  };
+  // PnL is intentionally omitted from the list view.
+  // See TradeDetailDialog for PnL derived from Alpaca fills.
 
   return (
     <div className="min-h-screen bg-background">
@@ -298,7 +292,6 @@ export default function TradesPage() {
                       <TableHead>Master Qty</TableHead>
                       <TableHead>Client Qty</TableHead>
                       <TableHead>Price</TableHead>
-                      <TableHead>PNL</TableHead>
                       <TableHead>Client ID</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Latency</TableHead>
@@ -350,39 +343,22 @@ export default function TradesPage() {
                             {trade.client_qty ? trade.client_qty.toFixed(4) : '-'}
                           </TableCell>
                             <TableCell className="text-xs">
-                              {trade.client_avg_price ? (
-                                <div>
-                                  <div className="font-semibold">${trade.client_avg_price.toFixed(2)}</div>
-                                  {trade.master_price && (
-                                    <div className="text-muted-foreground text-xs">
-                                      Master: ${trade.master_price.toFixed(2)}
-                                    </div>
-                                  )}
-                                </div>
-                              ) : trade.master_price ? (
-                                <div className="text-muted-foreground">${trade.master_price.toFixed(2)}</div>
+                              {/* Client Fill Price (always from Alpaca) */}
+                              {typeof fillPrices[trade.id] === 'number' ? (
+                                <span className="font-semibold">Client Fill: ${fillPrices[trade.id].toFixed(2)}</span>
+                              ) : trade.status === 'success' && trade.client_order_id ? (
+                                <button
+                                  className="text-xs underline text-muted-foreground hover:text-foreground"
+                                  onClick={(e) => { e.stopPropagation(); fetchClientFillPrice(trade); }}
+                                  disabled={fetchingFillId === trade.id}
+                                >
+                                  {fetchingFillId === trade.id ? 'Fetching fill…' : 'Get Client Fill'}
+                                </button>
                               ) : (
-                                '-'
+                                <span className="text-muted-foreground">Client Fill: -</span>
                               )}
                             </TableCell>
-                            <TableCell>
-                              {(() => {
-                                const pnl = calculatePNL(trade);
-                                if (pnl === null) {
-                                  return <span className="text-muted-foreground">-</span>;
-                                }
-                                const isPositive = pnl >= 0;
-                                return (
-                                  <span
-                                    className={`font-semibold ${
-                                      isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-                                    }`}
-                                  >
-                                    {isPositive ? '+' : ''}{formatCurrency(pnl)}
-                                  </span>
-                                );
-                              })()}
-                            </TableCell>
+                          
                           <TableCell className="font-mono text-xs">
                             {trade.client_account_id}
                           </TableCell>
@@ -421,7 +397,7 @@ export default function TradesPage() {
                           </TableRow>
                           {retryingTradeId === trade.id && trade.status === 'failed' && (
                             <TableRow>
-                              <TableCell colSpan={10} className="bg-muted/50 p-4">
+                              <TableCell colSpan={11} className="bg-muted/50 p-4">
                                 <div className="flex items-center gap-4 flex-wrap">
                                   <div className="text-sm font-medium">Edit Quantity:</div>
                                   <Input
