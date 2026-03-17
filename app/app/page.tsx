@@ -8,7 +8,7 @@ import { TradeTimeline } from '@/components/dashboard/trade-timeline';
 import { ClientBalancesTable } from '@/components/dashboard/client-balances-table';
 import { EquityGrowthChart } from '@/components/dashboard/equity-growth-chart';
 import { AppHeader } from '@/components/dashboard/app-header';
-import { Activity, CheckCircle2, XCircle, Clock, Users } from 'lucide-react';
+import { Activity, CheckCircle2, XCircle, Clock, Users, AlertTriangle } from 'lucide-react';
 
 export default function DashboardPage() {
   // Fetch trade statistics
@@ -35,6 +35,9 @@ export default function DashboardPage() {
   const tradeStats = stats?.data || {};
   const clientsData = clients?.data || [];
   const activeClients = clientsData.filter((c: any) => c.is_active).length;
+  const quarantinedClients = clientsData.filter(
+    (c: any) => c.circuit_breaker_state === 'open'
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -73,13 +76,19 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Active Clients */}
-        <div className="mb-8">
+        {/* Active + Quarantined Clients Row */}
+        <div className="mb-8 grid grid-cols-1 md:grid-cols-2 gap-6">
           <StatsCard
             title="Active Clients"
             value={`${activeClients} / ${clientsData.length}`}
             description="Total client accounts"
             icon={Users}
+          />
+          <StatsCard
+            title="Quarantined Accounts"
+            value={quarantinedClients.length}
+            description="Circuit breakers open"
+            icon={AlertTriangle}
           />
         </div>
 

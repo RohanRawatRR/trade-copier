@@ -23,6 +23,8 @@ export async function GET() {
           is_active: true,
           risk_multiplier: true,
           trade_direction: true,
+          circuit_breaker_state: true,
+          failure_count: true,
           // Skip datetime fields if they cause errors
           // created_at: true,
           // updated_at: true,

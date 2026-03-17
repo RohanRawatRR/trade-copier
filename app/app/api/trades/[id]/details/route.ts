@@ -104,13 +104,17 @@ export async function GET(
     }
 
     // Fetch current position for the symbol (to get average cost basis)
-    // For sell orders, we need the average cost basis of the position that was sold
     let positionDetails = null;
-    let entryPrice = null;
-    
-    // For sell orders, try to get position to find average cost basis
-    // For buy orders, entry price is the filled_avg_price from the order itself
-    if (trade.side.toLowerCase() === 'sell') {
+    let entryPrice: any = null;
+
+    // Determine position intent from order details when available
+    const positionIntent: string | null = orderDetails?.position_intent || null;
+    const isShortClose = positionIntent === 'buy_to_close';
+    const isLongClose = positionIntent === 'sell_to_close';
+    const isClosing = isShortClose || isLongClose || (!positionIntent && trade.side.toLowerCase() === 'sell');
+
+    // For closing orders, try to get position to find average cost basis
+    if (isClosing) {
       try {
         // Try to get position - if it exists, use avg_entry_price
         // If position doesn't exist (closed), we'll need to calculate from activities
@@ -124,11 +128,11 @@ export async function GET(
 
         if (positionResponse.ok) {
           positionDetails = await positionResponse.json();
-          // Average cost basis is the entry price for sell orders
+          // Average cost basis is the entry price for closing orders
           entryPrice = positionDetails.avg_entry_price || null;
         } else if (positionResponse.status === 404) {
-          // Position doesn't exist (fully closed after sell)
-          // Try to get from account activities - look for previous buy fills for this symbol
+          // Position doesn't exist (fully closed)
+          // Try to get from account activities - look for previous opening fills for this symbol
           try {
             const activitiesResponse = await fetch(
               `${baseUrl}/v2/account/activities/FILL?symbols=${trade.symbol}&page_size=100`,
@@ -143,20 +147,20 @@ export async function GET(
             
             if (activitiesResponse.ok) {
               const activities = await activitiesResponse.json();
-              // Find the most recent buy activity before this sell order
-              const buyActivities = activities
+              // For long close: look for prior BUY; for short close: prior SELL
+              const neededSide = isShortClose ? 'sell' : 'buy';
+              const priorActivities = activities
                 .filter((activity: any) => 
-                  activity.side === 'buy' && 
+                  activity.side === neededSide && 
                   activity.symbol === trade.symbol &&
                   new Date(activity.transaction_time) < new Date(orderDetails?.created_at || Date.now())
                 )
                 .sort((a: any, b: any) => 
                   new Date(b.transaction_time).getTime() - new Date(a.transaction_time).getTime()
                 );
-              
-              if (buyActivities.length > 0) {
-                // Use the price from the most recent buy
-                entryPrice = buyActivities[0].price || null;
+
+              if (priorActivities.length > 0) {
+                entryPrice = priorActivities[0].price || null;
               }
             }
           } catch (activitiesError: any) {
@@ -166,9 +170,6 @@ export async function GET(
       } catch (error: any) {
         console.error('Error fetching position details from Alpaca:', error);
       }
-    } else {
-      // For buy orders, entry price is the filled_avg_price from the order
-      entryPrice = orderDetails?.filled_avg_price || null;
     }
 
     // If we couldn't fetch order details and it's critical, return error
@@ -183,22 +184,26 @@ export async function GET(
       );
     }
 
-    // Calculate PNL if we have both entry and exit prices
-    let pnl = null;
+    // Calculate PNL if we have both entry and exit prices for closing orders
+    let pnl = null as number | null;
     const exitPrice = orderDetails?.filled_avg_price || null;
-    
-    if (entryPrice && exitPrice && orderDetails?.filled_qty) {
+
+    if (isClosing && entryPrice && exitPrice && orderDetails?.filled_qty) {
       const qty = parseFloat(orderDetails.filled_qty);
-      
-      // Calculate P&L based on position type:
-      // - LONG position (side='sell' to close): profit when exit > entry
-      // - SHORT position (side='buy' to close): profit when entry > exit
-      if (trade.side.toLowerCase() === 'buy') {
-        // Closing a SHORT position (bought to close)
+
+      if (isShortClose) {
+        // Short cover: profit when entry (sell) > exit (buy)
         pnl = (parseFloat(entryPrice) - parseFloat(exitPrice)) * qty;
-      } else {
-        // Closing a LONG position (sold to close)
+      } else if (isLongClose) {
+        // Long close: profit when exit (sell) > entry (buy)
         pnl = (parseFloat(exitPrice) - parseFloat(entryPrice)) * qty;
+      } else if (!positionIntent) {
+        // Fallback based on side if intent missing
+        if (trade.side.toLowerCase() === 'buy') {
+          pnl = (parseFloat(entryPrice) - parseFloat(exitPrice)) * qty;
+        } else {
+          pnl = (parseFloat(exitPrice) - parseFloat(entryPrice)) * qty;
+        }
       }
     }
 

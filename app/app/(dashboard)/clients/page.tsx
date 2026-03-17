@@ -42,6 +42,8 @@ export default function ClientsPage() {
   const [riskMultiplierValue, setRiskMultiplierValue] = useState<number>(1.0);
   const [tradeDirectionClient, setTradeDirectionClient] = useState<ClientAccount | null>(null);
   const [tradeDirectionValue, setTradeDirectionValue] = useState<string>('both');
+  const [circuitBreakerUpdatingId, setCircuitBreakerUpdatingId] = useState<string | null>(null);
+  const [isCircuitInfoOpen, setIsCircuitInfoOpen] = useState(false);
   const [formData, setFormData] = useState({
     account_id: '',
     account_name: '',
@@ -225,6 +227,33 @@ export default function ClientsPage() {
     },
   });
 
+  // Update circuit breaker state mutation
+  const updateCircuitBreakerMutation = useMutation({
+    mutationFn: async ({ id, state }: { id: string; state: 'open' | 'closed' }) => {
+      setCircuitBreakerUpdatingId(id);
+      const response = await fetch(`/api/clients/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ circuit_breaker_state: state }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to update circuit breaker state');
+      }
+      return response.json();
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      setCircuitBreakerUpdatingId(null);
+      const label = variables.state === 'closed' ? 'closed' : 'open';
+      showSuccess(`Circuit breaker ${label} for client ${variables.id}`, 'Circuit Breaker Updated');
+    },
+    onError: (error: Error) => {
+      setCircuitBreakerUpdatingId(null);
+      showError(error.message || 'Failed to update circuit breaker state', 'Error');
+    },
+  });
+
   const resetForm = () => {
     setFormData({
       account_id: '',
@@ -310,6 +339,9 @@ export default function ClientsPage() {
   };
 
   const clients: ClientAccount[] = data?.data || [];
+  const openCircuitCount = clients.filter((c: any) => c.circuit_breaker_state === 'open').length;
+  const activeCount = clients.filter((c: any) => c.is_active).length;
+  const inactiveCount = clients.length - activeCount;
 
   return (
     <div className="min-h-screen bg-background">
@@ -322,7 +354,21 @@ export default function ClientsPage() {
       <main className="container mx-auto px-4 py-8">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Client Accounts ({clients.length})</CardTitle>
+            <CardTitle>
+              Client Accounts ({clients.length})
+              {clients.length > 0 && (
+                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                  • Active: <span className="font-semibold text-foreground">{activeCount}</span>
+                  {' '}
+                  • Inactive: <span className="font-semibold text-foreground">{inactiveCount}</span>
+                </span>
+              )}
+              {openCircuitCount > 0 && (
+                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                  • Open: <span className="font-semibold text-amber-600">{openCircuitCount}</span>
+                </span>
+              )}
+            </CardTitle>
             <div className="flex gap-2">
               <Button
                 variant="outline"
@@ -354,6 +400,18 @@ export default function ClientsPage() {
                     <TableHead>Direction</TableHead>
                     <TableHead>Risk</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>
+                      <div className="inline-flex items-center gap-1">
+                        <span>Circuit Breaker</span>
+                        <button
+                          type="button"
+                          onClick={() => setIsCircuitInfoOpen(true)}
+                          className="inline-flex items-center justify-center"
+                        >
+                          <AlertCircle className="h-3.5 w-3.5 text-amber-500 cursor-pointer" />
+                        </button>
+                      </div>
+                    </TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -398,6 +456,39 @@ export default function ClientsPage() {
                         <Badge variant={client.is_active ? 'default' : 'secondary'}>
                           {client.is_active ? 'Active' : 'Inactive'}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            variant={
+                              client.circuit_breaker_state === 'open' ? 'destructive' : 'outline'
+                            }
+                          >
+                            {client.circuit_breaker_state === 'open' ? 'Open' : 'Closed'}
+                          </Badge>
+                          {client.circuit_breaker_state === 'open' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-xs"
+                              disabled={
+                                updateCircuitBreakerMutation.isPending &&
+                                circuitBreakerUpdatingId === client.account_id
+                              }
+                              onClick={() => {
+                                updateCircuitBreakerMutation.mutate({
+                                  id: client.account_id,
+                                  state: 'closed',
+                                });
+                              }}
+                            >
+                              {updateCircuitBreakerMutation.isPending &&
+                              circuitBreakerUpdatingId === client.account_id
+                                ? 'Updating...'
+                                : 'Close'}
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         {/* Skip created_at if it causes datetime issues */}
@@ -932,6 +1023,39 @@ export default function ClientsPage() {
               disabled={updateTradeDirectionMutation.isPending}
             >
               {updateTradeDirectionMutation.isPending ? 'Updating...' : 'Update Trade Direction'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Circuit Breaker Info Dialog */}
+      <Dialog open={isCircuitInfoOpen} onOpenChange={setIsCircuitInfoOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Circuit Breaker</DialogTitle>
+            <DialogDescription>
+              Understand how the circuit breaker protects your clients and system.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              The <span className="font-semibold">Circuit Breaker</span> automatically{' '}
+              <span className="font-semibold">opens</span> for a client after repeated trade failures
+              (for example, insufficient buying power or persistent API errors).
+            </p>
+            <p className="text-sm text-muted-foreground">
+              When it is <span className="font-semibold">Open</span>, that client is temporarily
+              excluded from trade replication so one problematic account does not impact others.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Once the underlying issue is resolved, you can manually{' '}
+              <span className="font-semibold">Close</span> the circuit breaker for that client to
+              resume normal trading.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCircuitInfoOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

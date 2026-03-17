@@ -1,8 +1,8 @@
 'use client';
 
-// Advanced Equity Analytics Chart with filters, search, and chart types
+// Simplified, readable Equity Analytics with compact controls and layout
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -24,7 +24,9 @@ import {
   Calendar,
   BarChart3,
   LineChart as LineChartIcon,
-  AreaChart as AreaChartIcon
+  AreaChart as AreaChartIcon,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import {
@@ -35,6 +37,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { MultiSelect } from '@/components/ui/multi-select';
+import { 
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 type ChartType = 'line' | 'area' | 'bar';
 type TimePeriod = '7d' | '30d' | '90d' | '365d';
@@ -258,24 +268,28 @@ export function EquityAnalyticsChart() {
 
   // Get selected accounts for display
   const selectedAccountsData = allAccounts.filter(acc => selectedAccounts.includes(acc.id));
+  const [visibleSeries, setVisibleSeries] = useState<string[]>([]);
+
+  // Keep visible series in sync with selection
+  useEffect(() => {
+    setVisibleSeries(selectedAccounts);
+  }, [selectedAccounts]);
+
+  const visibleAccountsData = selectedAccountsData.filter(acc => visibleSeries.includes(acc.id));
 
   if (isLoading || isLoadingHistory) {
     return (
-      <Card className="overflow-hidden border-0 shadow-xl bg-gradient-to-br from-background via-background to-muted/20">
-        <CardHeader className="bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 border-b pt-10">
-          <CardTitle className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-primary/10 animate-pulse">
-              <TrendingUp className="h-5 w-5 text-primary" />
-            </div>
-            <span className="bg-gradient-to-r from-foreground to-foreground/70 bg-clip-text text-transparent">
-              Equity Analytics
-            </span>
+      <Card className="border shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            Equity Analytics
           </CardTitle>
         </CardHeader>
-        <CardContent className="py-12">
+        <CardContent className="py-10">
           <div className="flex flex-col items-center justify-center gap-3">
-            <div className="h-8 w-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-            <div className="text-center text-muted-foreground font-medium">Loading chart data...</div>
+            <div className="h-6 w-6 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+            <div className="text-center text-muted-foreground">Loading data…</div>
           </div>
         </CardContent>
       </Card>
@@ -284,428 +298,372 @@ export function EquityAnalyticsChart() {
 
   if (error) {
     return (
-      <Card className="overflow-hidden border-0 shadow-xl bg-gradient-to-br from-background via-background to-destructive/5">
-        <CardHeader className="bg-gradient-to-r from-destructive/10 via-destructive/5 to-destructive/10 border-b border-destructive/20">
-          <CardTitle className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-destructive/10">
-              <TrendingUp className="h-5 w-5 text-destructive" />
-            </div>
+      <Card className="border shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-destructive" />
             Equity Analytics
           </CardTitle>
         </CardHeader>
-        <CardContent className="py-12">
-          <div className="text-center text-destructive font-medium">Failed to load chart data</div>
+        <CardContent className="py-8">
+          <div className="text-center text-destructive">Failed to load chart data</div>
         </CardContent>
       </Card>
     );
   }
 
+  // Custom tooltip renderer (shared across chart types)
+  const renderTooltip = ({ active, label, payload }: any) => {
+    if (!active || !payload || !payload.length) return null;
+    const index = chartData.findIndex((d) => d.date === label);
+    const valuesById: Record<string, number> = {};
+    payload.forEach((p: any) => {
+      if (p && typeof p.value !== 'undefined' && p.dataKey) {
+        valuesById[p.dataKey] = Number(p.value) || 0;
+      }
+    });
+
+    const rows = visibleAccountsData
+      .map((acc, i) => {
+        const value = valuesById[acc.id];
+        if (typeof value === 'undefined') return null;
+        const prev = index > 0 ? Number((chartData[index - 1] as any)[acc.id] ?? NaN) : NaN;
+        const delta = isNaN(prev) ? 0 : value - prev;
+        const positive = delta >= 0;
+        return {
+          id: acc.id,
+          name: acc.name,
+          color: getAccountColor(acc.id, i),
+          value,
+          delta,
+          positive,
+        };
+      })
+      .filter(Boolean) as Array<{ id: string; name: string; color: string; value: number; delta: number; positive: boolean }>;
+
+    rows.sort((a, b) => b.value - a.value);
+
+    return (
+      <div className="rounded-md border bg-card text-card-foreground shadow-sm min-w-[260px]">
+        <div className="px-3 py-2 border-b text-xs font-medium text-muted-foreground">
+          {label}
+        </div>
+        <div className="p-2">
+          <div className="space-y-1">
+            {rows.map((row) => (
+              <div key={row.id} className="flex items-center gap-2">
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: row.color }}
+                />
+                <span className="text-xs text-muted-foreground truncate flex-1" title={row.name}>
+                  {row.name}
+                </span>
+                <span className="text-xs font-semibold tabular-nums">
+                  {formatCurrency(row.value)}
+                </span>
+                {!isNaN(row.delta) && (
+                  <span className={`text-[10px] tabular-nums ml-1 ${row.positive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {row.positive ? '+' : ''}{formatCurrency(Math.abs(row.delta))}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      {/* Chart with Sleek Header */}
+    <div className="space-y-4">
       {selectedAccounts.length === 0 ? (
-        <Card className="overflow-hidden border-0 shadow-xl bg-gradient-to-br from-background via-background to-muted/20 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <CardContent className="py-16">
-            <div className="flex flex-col items-center justify-center gap-4 animate-in fade-in zoom-in-95 duration-700 delay-150">
-              <div className="p-4 rounded-2xl bg-muted/50 animate-pulse">
-                <TrendingUp className="h-8 w-8 text-muted-foreground" />
-              </div>
-              <div className="text-center">
-                <p className="text-lg font-semibold text-foreground mb-1">No Accounts Selected</p>
-                <p className="text-sm text-muted-foreground">Please select at least one account to view the chart</p>
-              </div>
-            </div>
+        <Card className="border shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-muted-foreground" />
+              Equity Analytics
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="py-14">
+            <div className="text-center text-muted-foreground">Select one or more accounts to view analytics.</div>
           </CardContent>
         </Card>
       ) : (
-        <Card className="overflow-hidden border-0 shadow-2xl bg-gradient-to-br from-background via-background to-muted/10 backdrop-blur-sm animate-in fade-in slide-in-from-bottom-4 duration-700">
-          {/* Sleek Header with Controls */}
-          <div className="border-b bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5 backdrop-blur-sm">
-            <div className="px-6 py-6">
-              <div className="flex items-center justify-between mb-6 animate-in fade-in slide-in-from-left-4 duration-500">
-                <div className="flex items-center gap-4">
-                  <div className="relative animate-in zoom-in-95 duration-500 delay-100">
-                    <div className="absolute inset-0 bg-primary/20 rounded-xl blur-lg opacity-50 animate-pulse" />
-                    <div className="relative p-3 rounded-xl bg-gradient-to-br from-primary/20 to-primary/10 ring-2 ring-primary/20 shadow-lg transition-transform hover:scale-110 duration-300">
-                      <TrendingUp className="h-6 w-6 text-primary" />
+        <Card className="border shadow-sm">
+          <CardHeader className="pb-4">
+            <CardTitle className="flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-primary" />
+                Equity Analytics
+              </span>
+              <span className="text-sm text-muted-foreground flex items-center gap-2">
+                <Calendar className="h-4 w-4" />
+                {timePeriod === '7d' ? 'Last 7 days' : timePeriod === '30d' ? 'Last 30 days' : timePeriod === '90d' ? 'Last 90 days' : 'Last 365 days'}
+                <span>•</span>
+                {selectedAccounts.length} selected
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-6 lg:grid-cols-10 items-stretch min-h-[640px]">
+              {/* Left: Accounts data (30%) */}
+              <div className="lg:col-span-3 pr-1 flex flex-col lg:max-h-[640px] lg:overflow-y-auto">
+
+                {/* Account Summary table */}
+                {selectedAccountsData.length > 0 ? (
+                  <div className="border rounded-md">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Account</TableHead>
+                          <TableHead className="text-right">Equity</TableHead>
+                          <TableHead className="text-right">Growth</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedAccountsData.map((account, index) => {
+                          const currentEquity = account.equity || 0;
+                          const growthPercent = account.growthPercent || 0;
+                          const growth = account.growth || 0;
+                          const isPositive = growthPercent >= 0;
+                          const accountColor = getAccountColor(account.id, index);
+                          return (
+                            <TableRow key={account.id}>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className="inline-block w-2.5 h-2.5 rounded-full"
+                                    style={{ backgroundColor: accountColor }}
+                                  />
+                                  <span className="truncate max-w-[220px]" title={account.name}>{account.name}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right font-medium">{formatCurrency(Number(currentEquity))}</TableCell>
+                              <TableCell className={`text-right ${isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                {isPositive ? '+' : ''}{growthPercent.toFixed(2)}% ({isPositive ? '+' : ''}{formatCurrency(growth)})
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">No account data</div>
+                )}
+
+                {/* Custom Legend with toggle (scrollable) */}
+                
+              </div>
+
+              {/* Right: Chart (70%) */}
+              <div className="lg:col-span-7 flex flex-col h-full overflow-hidden">
+                {/* Filters at top of chart */}
+                <div className="border rounded-md p-3 mb-4">
+                  <div className="grid gap-3">
+                    <div>
+                      <div className="text-xs text-muted-foreground mb-2">Accounts</div>
+                      <MultiSelect
+                        options={accountOptions}
+                        selected={selectedAccounts}
+                        onChange={setSelectedAccounts}
+                        placeholder="Select accounts…"
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-2">Time period</div>
+                        <Select value={timePeriod} onValueChange={(value) => setTimePeriod(value as TimePeriod)}>
+                          <SelectTrigger className="w-full h-10">
+                            <div className="flex items-center gap-2">
+                              <Calendar className="h-4 w-4 text-muted-foreground" />
+                              <SelectValue />
+                            </div>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="7d">Last 7 days</SelectItem>
+                            <SelectItem value="30d">Last 30 days</SelectItem>
+                            <SelectItem value="90d">Last 90 days</SelectItem>
+                            <SelectItem value="365d">Last 365 days</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-2">Chart type</div>
+                        <Select value={chartType} onValueChange={(value) => setChartType(value as ChartType)}>
+                          <SelectTrigger className="w-full h-10">
+                            <div className="flex items-center gap-2">
+                              {chartType === 'line' && <LineChartIcon className="h-4 w-4 text-muted-foreground" />}
+                              {chartType === 'area' && <AreaChartIcon className="h-4 w-4 text-muted-foreground" />}
+                              {chartType === 'bar' && <BarChart3 className="h-4 w-4 text-muted-foreground" />}
+                              <SelectValue />
+                            </div>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="line">Line</SelectItem>
+                            <SelectItem value="area">Area</SelectItem>
+                            <SelectItem value="bar">Bar</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                   </div>
-                  <div className="animate-in fade-in slide-in-from-left-4 duration-500 delay-200">
-                    <h3 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-foreground via-foreground to-foreground/70 bg-clip-text text-transparent">
-                      Equity Growth Analytics
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1.5 flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1">
-                        <Calendar className="h-3.5 w-3.5" />
-                        {timePeriod === '7d' ? 'Last 7 Days' : 
-                         timePeriod === '30d' ? 'Last 30 Days' :
-                         timePeriod === '90d' ? 'Last 90 Days' :
-                         'Last 365 Days'}
-                      </span>
-                      <span className="text-muted-foreground/60">•</span>
-                      <span className="font-medium text-foreground/80">
-                        {selectedAccounts.length} account{selectedAccounts.length !== 1 ? 's' : ''} selected
-                      </span>
-                    </p>
-                  </div>
                 </div>
-              </div>
-              
-              {/* Controls Row */}
-              <div className="flex flex-wrap items-end gap-4 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-300">
-                {/* Account Selection - Multiselect */}
-                <div className="flex-1 min-w-[300px] animate-in fade-in slide-in-from-left-4 duration-500 delay-300">
-                  <label className="text-xs font-bold text-foreground/70 mb-2.5 block uppercase tracking-wider">
-                    Accounts
-                  </label>
-                  <div className="relative">
-                    <MultiSelect
-                      options={accountOptions}
-                      selected={selectedAccounts}
-                      onChange={setSelectedAccounts}
-                      placeholder="Select accounts to compare..."
-                      className="w-full bg-background/50 backdrop-blur-sm border-border/50 hover:border-primary/30 transition-all duration-300 hover:scale-[1.02]"
-                    />
-                  </div>
-                </div>
-
-                {/* Time Period */}
-                <div className="w-[180px] animate-in fade-in slide-in-from-bottom-4 duration-500 delay-400">
-                  <label className="text-xs font-bold text-foreground/70 mb-2.5 block uppercase tracking-wider">
-                    Time Period
-                  </label>
-                  <Select value={timePeriod} onValueChange={(value) => setTimePeriod(value as TimePeriod)}>
-                    <SelectTrigger className="w-full h-11 bg-background/50 backdrop-blur-sm border-border/50 hover:border-primary/30 transition-all duration-300 shadow-sm hover:scale-[1.02] hover:shadow-md">
-                      <div className="flex items-center gap-2">
-                        <Calendar className="h-4 w-4 text-primary/70 transition-transform group-hover:rotate-12" />
-                        <SelectValue />
-                      </div>
-                    </SelectTrigger>
-                    <SelectContent className="backdrop-blur-sm animate-in fade-in zoom-in-95 duration-200">
-                      <SelectItem value="7d">Last 7 Days</SelectItem>
-                      <SelectItem value="30d">Last 30 Days</SelectItem>
-                      <SelectItem value="90d">Last 90 Days</SelectItem>
-                      <SelectItem value="365d">Last 365 Days</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Chart Type */}
-                <div className="w-[180px] animate-in fade-in slide-in-from-right-4 duration-500 delay-500">
-                  <label className="text-xs font-bold text-foreground/70 mb-2.5 block uppercase tracking-wider">
-                    Chart Type
-                  </label>
-                  <Select value={chartType} onValueChange={(value) => setChartType(value as ChartType)}>
-                    <SelectTrigger className="w-full h-11 bg-background/50 backdrop-blur-sm border-border/50 hover:border-primary/30 transition-all duration-300 shadow-sm hover:scale-[1.02] hover:shadow-md">
-                      <div className="flex items-center gap-2">
-                        {chartType === 'line' && <LineChartIcon className="h-4 w-4 text-primary/70 transition-transform group-hover:scale-110" />}
-                        {chartType === 'area' && <AreaChartIcon className="h-4 w-4 text-primary/70 transition-transform group-hover:scale-110" />}
-                        {chartType === 'bar' && <BarChart3 className="h-4 w-4 text-primary/70 transition-transform group-hover:scale-110" />}
-                        <SelectValue />
-                      </div>
-                    </SelectTrigger>
-                    <SelectContent className="backdrop-blur-sm animate-in fade-in zoom-in-95 duration-200">
-                      <SelectItem value="line">
-                        <div className="flex items-center gap-2">
-                          <LineChartIcon className="h-4 w-4" />
-                          Line Chart
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="area">
-                        <div className="flex items-center gap-2">
-                          <AreaChartIcon className="h-4 w-4" />
-                          Area Chart
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="bar">
-                        <div className="flex items-center gap-2">
-                          <BarChart3 className="h-4 w-4" />
-                          Bar Chart
-                        </div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-          </div>
-          <CardContent className="pt-8">
-            {/* Account Summary - Moved to Top */}
-            {selectedAccountsData.length > 0 && (
-              <div className="mb-10 pb-8 border-b border-border/50 animate-in fade-in slide-in-from-bottom-4 duration-500 delay-400">
-                <div className="flex items-center gap-2 mb-6 animate-in fade-in duration-500 delay-500">
-                  <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent animate-in slide-in-from-left-4 duration-700 delay-500" />
-                  <h4 className="text-sm font-bold text-foreground/80 px-4 uppercase tracking-widest">
-                    Account Summary
-                  </h4>
-                  <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent animate-in slide-in-from-right-4 duration-700 delay-500" />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {selectedAccountsData.map((account, index) => {
-                    // Use current equity from balances API, not historical chart data
-                    const currentEquity = account.equity || 0;
-                    const growthPercent = account.growthPercent || 0;
-                    const growth = account.growth || 0;
-                    const isPositive = growthPercent >= 0;
-                    const accountColor = getAccountColor(account.id, index);
-                    
-                    return (
-                      <div 
-                        key={account.id} 
-                        className="group relative overflow-hidden rounded-lg border border-border/50 bg-gradient-to-br from-card via-card to-muted/20 px-3.5 py-2.5 shadow-sm hover:shadow-lg hover:border-primary/30 transition-all duration-300 hover:-translate-y-1 animate-in fade-in slide-in-from-bottom-4 zoom-in-95"
-                        style={{
-                          animationDelay: `${index * 100}ms`,
-                          animationDuration: '500ms',
-                          animationFillMode: 'both',
-                        }}
-                      >
-                        {/* Gradient overlay on hover */}
-                        <div 
-                          className="absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-300"
-                          style={{ 
-                            background: `linear-gradient(135deg, ${accountColor}20, ${accountColor}05)`,
-                          }}
-                        />
-                        
-                        <div className="relative flex items-start justify-between gap-3 w-full">
-                          {/* Left side: Color indicator and account name */}
-                          <div className="flex items-start gap-2.5 flex-1 min-w-0">
-                            {/* Color indicator with glow effect */}
-                            <div className="relative flex-shrink-0 mt-0.5">
-                              <div 
-                                className="absolute inset-0 rounded-full blur-md opacity-30 group-hover:opacity-50 transition-all duration-300 group-hover:scale-125"
-                                style={{ backgroundColor: accountColor }}
-                              />
-                              <div 
-                                className="relative w-4 h-4 rounded-full border-2 border-background shadow-lg transition-transform duration-300 group-hover:scale-110 group-hover:rotate-12"
-                                style={{ backgroundColor: accountColor }}
-                              />
-                            </div>
-                            
-                            <div className="flex-1 min-w-0">
-                              <div className="text-muted-foreground text-xs font-semibold truncate uppercase tracking-wide mb-1">
-                                {account.name}
-                              </div>
-                              <div className="text-lg font-bold bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text text-transparent">
-                                {formatCurrency(Number(currentEquity))}
-                              </div>
-                            </div>
-                          </div>
-                          
-                          {/* Right side: Growth percentage */}
-                          {growthPercent !== 0 && (
-                            <div className="flex-shrink-0 flex flex-col items-end justify-start pr-1">
-                              <div className={`text-xs font-bold flex items-center gap-1 ${
-                                isPositive ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-                              }`}>
-                                <div className={`p-0.5 rounded ${
-                                  isPositive ? 'bg-green-500/10' : 'bg-red-500/10'
-                                }`}>
-                                  <TrendingUp className={`h-3 w-3 ${!isPositive ? 'rotate-180' : ''}`} />
-                                </div>
-                                <span>
-                                  {isPositive ? '+' : ''}{growthPercent.toFixed(2)}%
-                                </span>
-                              </div>
-                              <span className="text-xs font-medium text-muted-foreground mt-0.5">
-                                {isPositive ? '+' : ''}{formatCurrency(growth)}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            
-            <div className="relative animate-in fade-in zoom-in-95 duration-700 delay-600" style={{ width: '100%', height: '550px' }}>
-              {/* Chart background gradient */}
-              <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-primary/5 rounded-lg opacity-50 animate-pulse" />
-              <ResponsiveContainer width="100%" height="100%" className="animate-in fade-in duration-700 delay-700">
-                {chartType === 'line' && (
-                  <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                    <defs>
-                      {selectedAccountsData.map((account, index) => {
-                        const color = getAccountColor(account.id, index);
-                        return (
-                          <linearGradient key={account.id} id={`gradient-${account.id}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-                            <stop offset="100%" stopColor={color} stopOpacity={0} />
-                          </linearGradient>
-                        );
-                      })}
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                    <XAxis 
-                      dataKey="date" 
-                      className="text-xs"
-                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11, fontWeight: 500 }}
-                      angle={-45}
-                      textAnchor="end"
-                      height={80}
+                <div className="border rounded-md p-2 flex-1 min-h-[320px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    {chartType === 'line' && (
+                      <LineChart data={chartData} margin={{ top: 10, right: 24, left: 8, bottom: 32 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+                        <XAxis 
+                          dataKey="date"
+                      height={28}
+                      tickMargin={8}
+                      interval="preserveStartEnd"
+                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
                       stroke="hsl(var(--border))"
                     />
                     <YAxis 
-                      className="text-xs"
-                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11, fontWeight: 500 }}
+                      width={60}
+                      tickMargin={8}
+                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
                       tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
                       stroke="hsl(var(--border))"
                     />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '8px',
-                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                        padding: '12px',
-                      }}
-                      labelStyle={{
-                        fontWeight: 600,
-                        marginBottom: '8px',
-                      }}
-                      formatter={(value: any) => formatCurrency(Number(value) || 0)}
-                    />
-                    <Legend 
-                      wrapperStyle={{ paddingTop: '24px' }}
-                      iconType="line"
-                      iconSize={12}
-                    />
-                    {selectedAccountsData.map((account, index) => (
+                    <Tooltip content={renderTooltip} />
+                    {visibleAccountsData.map((account, index) => (
                       <Line
                         key={account.id}
                         type="monotone"
                         dataKey={account.id}
                         stroke={getAccountColor(account.id, index)}
-                        strokeWidth={3}
-                        dot={{ r: 4, fill: getAccountColor(account.id, index), strokeWidth: 2, stroke: '#fff' }}
-                        activeDot={{ r: 6, stroke: getAccountColor(account.id, index), strokeWidth: 2 }}
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{ r: 4 }}
                         name={account.name}
                       />
                     ))}
-                  </LineChart>
-                )}
-                {chartType === 'area' && (
-                  <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                    <defs>
-                      {selectedAccountsData.map((account, index) => {
-                        const color = getAccountColor(account.id, index);
-                        return (
-                          <linearGradient key={account.id} id={`areaGradient-${account.id}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={color} stopOpacity={0.4} />
-                            <stop offset="100%" stopColor={color} stopOpacity={0.05} />
-                          </linearGradient>
-                        );
-                      })}
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                    <XAxis 
-                      dataKey="date" 
-                      className="text-xs"
-                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11, fontWeight: 500 }}
-                      angle={-45}
-                      textAnchor="end"
-                      height={80}
-                      stroke="hsl(var(--border))"
-                    />
-                    <YAxis 
-                      className="text-xs"
-                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11, fontWeight: 500 }}
-                      tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                      stroke="hsl(var(--border))"
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '8px',
-                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                        padding: '12px',
-                      }}
-                      labelStyle={{
-                        fontWeight: 600,
-                        marginBottom: '8px',
-                      }}
-                      formatter={(value: any) => formatCurrency(Number(value) || 0)}
-                    />
-                    <Legend 
-                      wrapperStyle={{ paddingTop: '24px' }}
-                      iconType="line"
-                      iconSize={12}
-                    />
-                    {selectedAccountsData.map((account, index) => (
+                    </LineChart>
+                  )}
+                  {chartType === 'area' && (
+                    <AreaChart data={chartData} margin={{ top: 10, right: 24, left: 8, bottom: 32 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+                      <XAxis 
+                        dataKey="date"
+                        height={28}
+                        tickMargin={8}
+                        interval="preserveStartEnd"
+                        tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                        stroke="hsl(var(--border))"
+                      />
+                      <YAxis 
+                        width={60}
+                        tickMargin={8}
+                        tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                        tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                        stroke="hsl(var(--border))"
+                      />
+                    <Tooltip content={renderTooltip} />
+                    {visibleAccountsData.map((account, index) => (
                       <Area
                         key={account.id}
                         type="monotone"
                         dataKey={account.id}
                         stroke={getAccountColor(account.id, index)}
-                        fill={`url(#areaGradient-${account.id})`}
-                        strokeWidth={3}
+                        fill={getAccountColor(account.id, index) + '33'}
+                        strokeWidth={2}
                         name={account.name}
                       />
                     ))}
-                  </AreaChart>
-                )}
-                {chartType === 'bar' && (
-                  <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
-                    <defs>
-                      {selectedAccountsData.map((account, index) => {
-                        const color = getAccountColor(account.id, index);
-                        return (
-                          <linearGradient key={account.id} id={`barGradient-${account.id}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={color} stopOpacity={0.9} />
-                            <stop offset="100%" stopColor={color} stopOpacity={0.6} />
-                          </linearGradient>
-                        );
-                      })}
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                    <XAxis 
-                      dataKey="date" 
-                      className="text-xs"
-                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11, fontWeight: 500 }}
-                      angle={-45}
-                      textAnchor="end"
-                      height={80}
-                      stroke="hsl(var(--border))"
-                    />
-                    <YAxis 
-                      className="text-xs"
-                      tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11, fontWeight: 500 }}
-                      tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                      stroke="hsl(var(--border))"
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '8px',
-                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                        padding: '12px',
-                      }}
-                      labelStyle={{
-                        fontWeight: 600,
-                        marginBottom: '8px',
-                      }}
-                      formatter={(value: any) => formatCurrency(Number(value) || 0)}
-                    />
-                    <Legend 
-                      wrapperStyle={{ paddingTop: '24px' }}
-                      iconSize={12}
-                    />
-                    {selectedAccountsData.map((account, index) => (
+                    </AreaChart>
+                  )}
+                  {chartType === 'bar' && (
+                    <BarChart data={chartData} margin={{ top: 10, right: 24, left: 8, bottom: 32 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+                      <XAxis 
+                        dataKey="date"
+                        height={28}
+                        tickMargin={8}
+                        interval="preserveStartEnd"
+                        tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                        stroke="hsl(var(--border))"
+                      />
+                      <YAxis 
+                        width={60}
+                        tickMargin={8}
+                        tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                        tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                        stroke="hsl(var(--border))"
+                      />
+                    <Tooltip content={renderTooltip} />
+                    {visibleAccountsData.map((account, index) => (
                       <Bar
                         key={account.id}
                         dataKey={account.id}
-                        fill={`url(#barGradient-${account.id})`}
-                        radius={[4, 4, 0, 0]}
+                        fill={getAccountColor(account.id, index)}
+                        radius={[3, 3, 0, 0]}
                         name={account.name}
                       />
                     ))}
-                  </BarChart>
+                    </BarChart>
+                  )}
+                  </ResponsiveContainer>
+                </div>
+                {/* Series toggles below chart */}
+                {selectedAccountsData.length > 0 && (
+                  <div className="space-y-2 mt-4">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs text-muted-foreground">Series</div>
+                      <button
+                        className="text-xs text-primary hover:underline"
+                        onClick={() => setVisibleSeries(selectedAccounts)}
+                      >
+                        Reset
+                      </button>
+                    </div>
+                    <div className="border rounded-md p-2 max-h-32 overflow-auto">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                        {selectedAccountsData.map((account, index) => {
+                          const color = getAccountColor(account.id, index);
+                          const active = visibleSeries.includes(account.id);
+                          return (
+                            <button
+                              key={account.id}
+                              type="button"
+                              onClick={() =>
+                                setVisibleSeries((prev) =>
+                                  prev.includes(account.id)
+                                    ? prev.filter((id) => id !== account.id)
+                                    : [...prev, account.id]
+                                )
+                              }
+                              className={`flex items-center gap-2 rounded border px-2 py-1 text-left text-xs transition-colors ${
+                                active
+                                  ? 'bg-background hover:bg-accent/40'
+                                  : 'bg-muted/40 text-muted-foreground hover:bg-muted'
+                              }`}
+                              title={account.name}
+                              aria-pressed={active}
+                            >
+                              <span
+                                className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+                                style={{ backgroundColor: color, opacity: active ? 1 : 0.3 }}
+                              />
+                              <span className="truncate flex-1">{account.name}</span>
+                              {active ? (
+                                <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                              ) : (
+                                <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
                 )}
-              </ResponsiveContainer>
+              </div>
             </div>
           </CardContent>
         </Card>

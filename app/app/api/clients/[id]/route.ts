@@ -17,7 +17,7 @@ export async function PATCH(
     const { id } = await params;
     const account_id = id; // Use account_id directly (string)
     const body = await request.json();
-    const { account_name, email, api_key, secret_key, is_active } = body;
+    const { account_name, email, api_key, secret_key, is_active, circuit_breaker_state } = body;
 
     // Check if client exists
     const existingClient = await prisma.clientAccount.findUnique({
@@ -40,6 +40,7 @@ export async function PATCH(
     if (account_name !== undefined) updateData.account_name = account_name;
     if (email !== undefined) updateData.email = email;
     if (is_active !== undefined) updateData.is_active = is_active;
+    if (circuit_breaker_state !== undefined) updateData.circuit_breaker_state = circuit_breaker_state;
 
     // Encrypt new keys if provided
     if (api_key) updateData.encrypted_api_key = encryptApiKey(api_key);
@@ -54,6 +55,7 @@ export async function PATCH(
         account_name: true,
         email: true,
         is_active: true,
+        circuit_breaker_state: true,
         created_at: true,
         updated_at: true,
       },
