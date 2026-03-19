@@ -19,6 +19,7 @@ export function AppHeader({ title, description }: AppHeaderProps) {
   const navItems = [
     { href: '/', label: 'Dashboard' },
     { href: '/clients', label: 'Clients' },
+    { href: '/positions', label: 'Positions' },
     { href: '/trades', label: 'Trades' },
     { href: '/analytics', label: 'Analytics' },
     { href: '/settings', label: 'Settings' },
