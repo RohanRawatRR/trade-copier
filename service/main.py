@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 import structlog
 
 # Add the service directory to Python path so imports work regardless of where script is run from
@@ -407,11 +408,17 @@ async def main():
     # Configure logging
     configure_logging()
     
+    # Increase thread pool size for I/O-bound Alpaca API calls.
+    # Default is min(32, cpu_count+4) = 5 on t2.small (1 vCPU), which causes
+    # queuing when dispatching to 100+ clients (117 clients × 4 calls = 468 tasks).
+    # All calls are network I/O so a large pool is safe and eliminates the bottleneck.
+    loop = asyncio.get_event_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=250))
+
     # Create application instance
     app = TradeCopierApp()
-    
+
     # Setup signal handlers
-    loop = asyncio.get_event_loop()
     
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(
