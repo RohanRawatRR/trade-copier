@@ -64,16 +64,40 @@ class OrderExecutor:
     
     def __init__(self, key_store: KeyStore):
         self.key_store = key_store
-        
+
         # Circuit breakers for each client (created on-demand)
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
-        
+
+        # Cache TradingClient per account to avoid a new HTTP session / TLS
+        # handshake on every order submission.
+        # {account_id: {"api_key": str, "client": TradingClient}}
+        self._trading_client_cache: Dict[str, Dict] = {}
+
         logger.info(
             "order_executor_initialized",
             mode="full_parallel",
             note="All clients execute simultaneously for minimum latency"
         )
     
+    def _get_trading_client(self, account_id: str, api_key: str, secret_key: str) -> TradingClient:
+        """
+        Return a cached TradingClient for the given account.
+
+        Creates a new client only on first call or when credentials have
+        rotated, avoiding repeated TCP/TLS handshake overhead.
+        """
+        cached = self._trading_client_cache.get(account_id)
+        if cached is None or cached["api_key"] != api_key:
+            self._trading_client_cache[account_id] = {
+                "api_key": api_key,
+                "client": TradingClient(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                    paper=settings.use_paper_trading
+                )
+            }
+        return self._trading_client_cache[account_id]["client"]
+
     def _get_circuit_breaker(self, client_account_id: str) -> CircuitBreaker:
         """Get or create circuit breaker for client"""
         if client_account_id not in self.circuit_breakers:
@@ -383,11 +407,12 @@ class OrderExecutor:
         Submit order to Alpaca with retry logic.
         """
         try:
-            # Create Alpaca client
-            client = TradingClient(
+            # Get (or create) a cached TradingClient for this account.
+            # Re-creates only if credentials have changed since last call.
+            client = self._get_trading_client(
+                account_id=client_order["account_id"],
                 api_key=client_order["api_key"],
-                secret_key=client_order["secret_key"],
-                paper=settings.use_paper_trading
+                secret_key=client_order["secret_key"]
             )
             
             # Convert side to OrderSide enum

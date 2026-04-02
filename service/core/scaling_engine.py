@@ -42,6 +42,15 @@ class ScalingEngine:
         self.master_equity: Optional[float] = None
         self._cache_timestamp: Optional[float] = None
         self._cache_ttl_seconds = 60  # Refresh master equity every 60s
+        # Cache TradingClient per client account to avoid creating a new HTTP
+        # session (+ TLS handshake) on every calculate_client_quantity() call.
+        # Stored as {account_id: {"api_key": str, "client": TradingClient}}
+        # so a credential rotation auto-creates a fresh client.
+        self._trading_client_cache: Dict[str, Dict] = {}
+        # Cache fractionable flag per symbol. This is a static asset property
+        # that never changes, so no TTL needed — resets on service restart.
+        # Eliminates 120 get_asset() API calls per trade down to 0 after warmup.
+        self._fractional_support_cache: Dict[str, bool] = {}
     
     async def initialize(self):
         """Initialize master account client"""
@@ -115,7 +124,8 @@ class ScalingEngine:
         symbol: str,
         client_account: Dict,
         side: str = "buy",
-        current_price: Optional[float] = None
+        current_price: Optional[float] = None,
+        master_remaining: Optional[float] = None
     ) -> Optional[float]:
         """
         Calculate scaled quantity for a client account.
@@ -134,11 +144,12 @@ class ScalingEngine:
             # Refresh master equity if needed
             await self._refresh_master_equity()
             
-            # Get client's Alpaca client
-            client = TradingClient(
+            # Get (or create) a cached TradingClient for this account.
+            # Re-creates only if credentials have changed since last call.
+            client = self._get_trading_client(
+                account_id=client_account["account_id"],
                 api_key=client_account["api_key"],
-                secret_key=client_account["secret_key"],
-                paper=settings.use_paper_trading
+                secret_key=client_account["secret_key"]
             )
             
             # Get client account info (run in thread pool to avoid blocking)
@@ -154,12 +165,15 @@ class ScalingEngine:
                 client_owned_qty = 0.0
 
             # Check Master's remaining position
-            try:
-                master_pos = await asyncio.to_thread(self.master_client.get_open_position, symbol)
-                master_remaining = float(master_pos.qty)
-            except Exception:
-                # If get_open_position fails, it usually means position is 0
-                master_remaining = 0.0
+            # Use pre-fetched value if provided (avoids 1 API call per client).
+            # Falls back to fetching individually only when called without it.
+            if master_remaining is None:
+                try:
+                    master_pos = await asyncio.to_thread(self.master_client.get_open_position, symbol)
+                    master_remaining = float(master_pos.qty)
+                except Exception:
+                    # If get_open_position fails, it usually means position is 0
+                    master_remaining = 0.0
             
             # Filter trades based on client's trade_direction preference
             trade_direction_filter = client_account.get("trade_direction", "both")
@@ -516,33 +530,77 @@ class ScalingEngine:
         
         return scaled_qty
     
+    def _get_trading_client(self, account_id: str, api_key: str, secret_key: str) -> TradingClient:
+        """
+        Return a cached TradingClient for the given account.
+
+        Creates a new client only on first call or when credentials have
+        rotated, avoiding repeated TCP/TLS handshake overhead.
+        """
+        cached = self._trading_client_cache.get(account_id)
+        if cached is None or cached["api_key"] != api_key:
+            self._trading_client_cache[account_id] = {
+                "api_key": api_key,
+                "client": TradingClient(
+                    api_key=api_key,
+                    secret_key=secret_key,
+                    paper=settings.use_paper_trading
+                )
+            }
+        return self._trading_client_cache[account_id]["client"]
+
     async def _check_fractional_support(self, symbol: str, client: TradingClient) -> bool:
         """
         Check if a symbol supports fractional shares.
-        
+
+        Result is cached permanently in memory (fractionable is a static asset
+        property). 120 clients trading the same symbol pay the API cost once on
+        the first trade; every subsequent call is a dict lookup.
+
         Args:
             symbol: Trading symbol
-            client: Alpaca TradingClient instance
-        
+            client: Alpaca TradingClient instance (used only on cache miss)
+
         Returns:
             True if fractional shares supported
         """
+        if symbol in self._fractional_support_cache:
+            return self._fractional_support_cache[symbol]
+
         try:
-            # Get asset info (run in thread pool to avoid blocking)
+            # Cache miss — fetch from Alpaca once and store permanently.
             asset = await asyncio.to_thread(client.get_asset, symbol)
-            
-            # Check if asset is fractionable
-            return asset.fractionable if hasattr(asset, 'fractionable') else False
-        
+            result = asset.fractionable if hasattr(asset, 'fractionable') else False
+            self._fractional_support_cache[symbol] = result
+            logger.debug("fractional_support_cached", symbol=symbol, fractionable=result)
+            return result
+
         except Exception as e:
             logger.warning(
                 "failed_to_check_fractional_support",
                 symbol=symbol,
                 error=str(e)
             )
-            # Default to whole shares if we can't determine
+            # Default to whole shares if we can't determine.
+            # Do NOT cache failures — allow a retry on the next trade.
             return False
     
+    async def get_master_position(self, symbol: str) -> float:
+        """
+        Pre-fetch master account's current position for a symbol.
+
+        Call this ONCE per trade event and pass the result into
+        calculate_client_quantity() to avoid 120x redundant API calls.
+
+        Returns:
+            Current position qty (positive=long, negative=short, 0=no position)
+        """
+        try:
+            master_pos = await asyncio.to_thread(self.master_client.get_open_position, symbol)
+            return float(master_pos.qty)
+        except Exception:
+            return 0.0
+
     async def get_current_price(self, symbol: str) -> Optional[float]:
         """
         Get current market price for a symbol.

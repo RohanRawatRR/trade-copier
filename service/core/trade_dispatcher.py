@@ -94,7 +94,19 @@ class TradeDispatcher:
             current_price = await self.scaling_engine.get_current_price(symbol)
             if not current_price:
                 current_price = price  # Fallback to fill price
-            
+
+            # Pre-fetch master position ONCE and share across all client calculations.
+            # Without this, every calculate_client_quantity() call makes its own
+            # get_open_position() API call — 120 identical calls for 120 clients.
+            master_remaining = await self.scaling_engine.get_master_position(symbol)
+
+            logger.debug(
+                "master_position_prefetched",
+                symbol=symbol,
+                master_remaining=master_remaining,
+                client_count=len(clients)
+            )
+
             # Calculate scaled quantities for ALL clients in parallel
             scaling_tasks = [
                 self.scaling_engine.calculate_client_quantity(
@@ -102,7 +114,8 @@ class TradeDispatcher:
                     symbol=symbol,
                     client_account=client,
                     side=side,
-                    current_price=current_price
+                    current_price=current_price,
+                    master_remaining=master_remaining
                 )
                 for client in clients
             ]
