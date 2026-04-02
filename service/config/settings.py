@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     order_batch_size: int = Field(default=100, ge=1, le=200)
     rate_limit_delay: float = Field(default=0.05, ge=0.01, le=1.0)
     websocket_reconnect_delay: int = Field(default=5, ge=1, le=60)
+    # Thread pool size for asyncio.to_thread() (blocking Alpaca SDK calls).
+    # Default Python pool = min(32, cpu_count * 5) = 20 on 4vCPU — far too small
+    # for 120+ concurrent clients. Set to at least 2× max_concurrent_orders to
+    # ensure all blocking calls can run simultaneously without queueing.
+    thread_pool_size: int = Field(default=300, ge=50, le=2000)
     
     # Scaling Configuration
     # Uses equity-based scaling: client_qty = master_qty × (client_equity / master_equity)

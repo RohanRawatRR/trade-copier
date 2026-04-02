@@ -10,6 +10,7 @@ Environment variables configured via .env file or system environment.
 import asyncio
 import signal
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -406,12 +407,20 @@ async def main():
     """Main entry point"""
     # Configure logging
     configure_logging()
-    
+
+    # Override the default thread pool (min(32, cpu*5) = 20 on 4vCPU).
+    # asyncio.to_thread() uses this pool for all blocking Alpaca SDK calls.
+    # With 120 clients each making concurrent API calls, 20 workers creates a
+    # deep queue — the last clients wait 5+ rounds × ~500ms = 3+ seconds.
+    # Setting to thread_pool_size (default 300) lets all calls run in parallel.
+    loop = asyncio.get_event_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=settings.thread_pool_size))
+    logger.info("thread_pool_configured", max_workers=settings.thread_pool_size)
+
     # Create application instance
     app = TradeCopierApp()
-    
+
     # Setup signal handlers
-    loop = asyncio.get_event_loop()
     
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(
