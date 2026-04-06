@@ -250,30 +250,27 @@ class OrderExecutor:
     ) -> Dict:
         """
         Execute order for a single client with circuit breaker and retry logic.
-        
-        Args:
-            master_order_id: Master order ID
-            symbol: Trading symbol
-            side: buy or sell
-            order_type: market, limit, etc.
-            master_price: Price for limit/stop orders
-            master_trade_time: Master trade timestamp
-            client_order: Dict with account_id, qty, credentials
-            trade_logger: TradeLogger instance
-        
-        Returns:
-            Dict with success status and details
+
+        Hot-path design:
+        1. audit log creation and order submission fire in parallel (both are
+           independent — we only need the audit_log_id after both complete).
+        2. All post-order work (DB update, metrics, latency alerts) is fired as
+           a background task so asyncio.gather() can return as soon as the order
+           is confirmed, without waiting for bookkeeping I/O.
         """
         client_account_id = client_order["account_id"]
         qty = client_order["qty"]
-        
-        # Note: Semaphore removed to allow true parallel execution within batches
-        # Rate limiting is now handled between batches only
         start_time = time.perf_counter()
-            
+        audit_log_id = None  # may remain None if audit write fails
+
         try:
-            # Create audit log entry
-            audit_log_id = await self.key_store.log_trade_attempt(
+            circuit_breaker = self._get_circuit_breaker(client_account_id)
+
+            # Fire audit log creation and order submission simultaneously.
+            # The DB insert (~5ms) overlaps with the Alpaca API call (~500ms+),
+            # removing it entirely from the sequential hot path.
+            audit_result, order_result = await asyncio.gather(
+                self.key_store.log_trade_attempt(
                     master_order_id=master_order_id,
                     client_account_id=client_account_id,
                     symbol=symbol,
@@ -284,45 +281,110 @@ class OrderExecutor:
                     master_trade_time=master_trade_time,
                     client_qty=qty,
                     scaling_method_used=client_order.get("scaling_method")
-                )
-                
-            # Get circuit breaker for this client
-            circuit_breaker = self._get_circuit_breaker(client_account_id)
-            
-            # Execute order through circuit breaker
-            result = await circuit_breaker.call(
-                self._submit_order_with_retry,
-                client_order,
-                symbol,
-                side,
-                order_type,
-                qty,
-                master_price
+                ),
+                circuit_breaker.call(
+                    self._submit_order_with_retry,
+                    client_order,
+                    symbol,
+                    side,
+                    order_type,
+                    qty,
+                    master_price
+                ),
+                return_exceptions=True
             )
-            
-            # Calculate latency
+
+            # Extract audit_log_id first (needed in both success and failure paths)
+            if isinstance(audit_result, Exception):
+                logger.warning("audit_log_creation_failed", error=str(audit_result))
+            else:
+                audit_log_id = audit_result
+
+            # Raise now if the order itself failed
+            if isinstance(order_result, Exception):
+                raise order_result
+
             latency_ms = int((time.perf_counter() - start_time) * 1000)
-            
-            # Update audit log with success
-            await self.key_store.update_trade_result(
-                audit_log_id=audit_log_id,
-                status="success",
-                client_order_id=result["order_id"],
-                client_filled_qty=result.get("filled_qty", qty),
-                client_avg_price=result.get("filled_avg_price"),
-                replication_latency_ms=latency_ms
-            )
-            
-            # Log success
+
+            # Sync structured log — no I/O, keep inline
             trade_logger.log_client_success(
                 client_account_id=client_account_id,
-                client_order_id=result["order_id"],
+                client_order_id=order_result["order_id"],
                 qty=qty,
                 latency_ms=latency_ms,
                 master_trade_time=master_trade_time
             )
-            
-            # Check latency threshold
+
+            # All remaining work (DB update, metrics, latency alert) runs in the
+            # background. asyncio.gather() for this batch can return immediately
+            # after this point rather than waiting for bookkeeping I/O.
+            asyncio.create_task(self._post_order_bookkeeping(
+                audit_log_id=audit_log_id,
+                order_result=order_result,
+                qty=qty,
+                latency_ms=latency_ms,
+                symbol=symbol,
+                side=side,
+                master_order_id=master_order_id
+            ))
+
+            return {
+                "success": True,
+                "client_account_id": client_account_id,
+                "order_id": order_result["order_id"],
+                "latency_ms": latency_ms
+            }
+
+        except Exception as e:
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            error_message = str(e)
+
+            trade_logger.log_client_failure(
+                client_account_id=client_account_id,
+                error=error_message
+            )
+
+            circuit_breaker = self._get_circuit_breaker(client_account_id)
+            asyncio.create_task(self._post_order_failure_bookkeeping(
+                audit_log_id=audit_log_id,
+                error_message=error_message,
+                latency_ms=latency_ms,
+                client_account_id=client_account_id,
+                circuit_breaker_state=circuit_breaker.state
+            ))
+
+            return {
+                "success": False,
+                "client_account_id": client_account_id,
+                "error": error_message,
+                "latency_ms": latency_ms
+            }
+
+    async def _post_order_bookkeeping(
+        self,
+        audit_log_id: Optional[int],
+        order_result: Dict,
+        qty: float,
+        latency_ms: int,
+        symbol: str,
+        side: str,
+        master_order_id: str
+    ) -> None:
+        """
+        Background task: DB audit update + metrics + latency alert.
+        Runs after the order is confirmed, off the hot path.
+        """
+        try:
+            if audit_log_id is not None:
+                await self.key_store.update_trade_result(
+                    audit_log_id=audit_log_id,
+                    status="success",
+                    client_order_id=order_result["order_id"],
+                    client_filled_qty=order_result.get("filled_qty", qty),
+                    client_avg_price=order_result.get("filled_avg_price"),
+                    replication_latency_ms=latency_ms
+                )
+
             if latency_ms > settings.latency_critical_threshold:
                 alert_manager = await get_alert_manager()
                 await alert_manager.alert_latency_threshold_exceeded(
@@ -330,65 +392,49 @@ class OrderExecutor:
                     latency_ms=latency_ms,
                     threshold=settings.latency_critical_threshold
                 )
-            
-            # Record metric
+
             await self.key_store.record_metric(
                 "replication_latency_ms",
                 latency_ms,
                 {"symbol": symbol, "side": side}
             )
-            
-            return {
-                "success": True,
-                "client_account_id": client_account_id,
-                "order_id": result["order_id"],
-                "latency_ms": latency_ms
-            }
-        
         except Exception as e:
-            # Calculate latency even for failures
-            latency_ms = int((time.perf_counter() - start_time) * 1000)
-            
-            # Determine error type
-            error_message = str(e)
-            
-            # Update audit log with failure
-            if 'audit_log_id' in locals():
+            logger.error("post_order_bookkeeping_failed", error=str(e), exc_info=True)
+
+    async def _post_order_failure_bookkeeping(
+        self,
+        audit_log_id: Optional[int],
+        error_message: str,
+        latency_ms: int,
+        client_account_id: str,
+        circuit_breaker_state: str
+    ) -> None:
+        """
+        Background task: DB audit update + circuit breaker persistence + alert.
+        Runs after a failed order, off the hot path.
+        """
+        try:
+            if audit_log_id is not None:
                 await self.key_store.update_trade_result(
                     audit_log_id=audit_log_id,
                     status="failed",
                     error_message=error_message,
                     replication_latency_ms=latency_ms
                 )
-            
-            # Log failure
-            trade_logger.log_client_failure(
-                client_account_id=client_account_id,
-                error=error_message
-            )
-            
-            # Update circuit breaker state in database
-            circuit_breaker = self._get_circuit_breaker(client_account_id)
-            if circuit_breaker.state == "open":
+
+            if circuit_breaker_state == "open":
                 await self.key_store.update_circuit_breaker(
                     client_account_id,
                     "open",
                     increment_failures=True
                 )
-                
-                # Alert about circuit breaker
                 alert_manager = await get_alert_manager()
                 await alert_manager.alert_circuit_breaker_opened(
                     client_account_id=client_account_id,
                     reason=error_message
                 )
-            
-            return {
-                "success": False,
-                "client_account_id": client_account_id,
-                "error": error_message,
-                "latency_ms": latency_ms
-            }
+        except Exception as e:
+            logger.error("post_order_failure_bookkeeping_failed", error=str(e), exc_info=True)
     
     @with_retry(
         max_attempts=3,

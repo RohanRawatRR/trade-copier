@@ -152,17 +152,22 @@ class ScalingEngine:
                 secret_key=client_account["secret_key"]
             )
             
-            # Get client account info (run in thread pool to avoid blocking)
-            client_account_info = await asyncio.to_thread(client.get_account)
-            client_equity = float(client_account_info.equity)
-            client_buying_power = float(client_account_info.buying_power)
-            
-            # Check current client position
-            try:
-                client_pos = await asyncio.to_thread(client.get_open_position, symbol)
-                client_owned_qty = float(client_pos.qty) # Positive = Long, Negative = Short
-            except Exception:
-                client_owned_qty = 0.0
+            # Fetch account info and current position in parallel — both are
+            # independent reads, no reason to wait for one before firing the other.
+            # Saves one full sequential API round-trip (~300-500ms) per client.
+            account_result, pos_result = await asyncio.gather(
+                asyncio.to_thread(client.get_account),
+                asyncio.to_thread(client.get_open_position, symbol),
+                return_exceptions=True
+            )
+
+            if isinstance(account_result, Exception):
+                raise account_result
+            client_equity = float(account_result.equity)
+            client_buying_power = float(account_result.buying_power)
+
+            # Position missing = client has no position in this symbol (normal)
+            client_owned_qty = 0.0 if isinstance(pos_result, Exception) else float(pos_result.qty)
 
             # Check Master's remaining position
             # Use pre-fetched value if provided (avoids 1 API call per client).
