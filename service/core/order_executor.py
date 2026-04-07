@@ -315,13 +315,23 @@ class OrderExecutor:
                 master_trade_time=master_trade_time
             )
 
-            # All remaining work (DB update, metrics, latency alert) runs in the
-            # background. asyncio.gather() for this batch can return immediately
-            # after this point rather than waiting for bookkeeping I/O.
+            # Update audit record inline — fast UPDATE (~5ms), critical for
+            # Trade History showing correct status (not stuck as "pending").
+            if audit_log_id is not None:
+                try:
+                    await self.key_store.update_trade_result(
+                        audit_log_id=audit_log_id,
+                        status="success",
+                        client_order_id=order_result["order_id"],
+                        client_filled_qty=order_result.get("filled_qty", qty),
+                        client_avg_price=order_result.get("filled_avg_price"),
+                        replication_latency_ms=latency_ms
+                    )
+                except Exception as db_err:
+                    logger.error("update_trade_result_failed", error=str(db_err))
+
+            # Non-critical work (metrics + latency alert) runs in background.
             asyncio.create_task(self._post_order_bookkeeping(
-                audit_log_id=audit_log_id,
-                order_result=order_result,
-                qty=qty,
                 latency_ms=latency_ms,
                 symbol=symbol,
                 side=side,
@@ -344,11 +354,21 @@ class OrderExecutor:
                 error=error_message
             )
 
+            # Update audit record inline for failures too.
+            if audit_log_id is not None:
+                try:
+                    await self.key_store.update_trade_result(
+                        audit_log_id=audit_log_id,
+                        status="failed",
+                        error_message=error_message,
+                        replication_latency_ms=latency_ms
+                    )
+                except Exception as db_err:
+                    logger.error("update_trade_result_failed", error=str(db_err))
+
             circuit_breaker = self._get_circuit_breaker(client_account_id)
             asyncio.create_task(self._post_order_failure_bookkeeping(
-                audit_log_id=audit_log_id,
                 error_message=error_message,
-                latency_ms=latency_ms,
                 client_account_id=client_account_id,
                 circuit_breaker_state=circuit_breaker.state
             ))
@@ -362,29 +382,16 @@ class OrderExecutor:
 
     async def _post_order_bookkeeping(
         self,
-        audit_log_id: Optional[int],
-        order_result: Dict,
-        qty: float,
         latency_ms: int,
         symbol: str,
         side: str,
         master_order_id: str
     ) -> None:
         """
-        Background task: DB audit update + metrics + latency alert.
-        Runs after the order is confirmed, off the hot path.
+        Background task: non-critical metrics + latency alert only.
+        DB audit update is handled inline in _execute_single_order.
         """
         try:
-            if audit_log_id is not None:
-                await self.key_store.update_trade_result(
-                    audit_log_id=audit_log_id,
-                    status="success",
-                    client_order_id=order_result["order_id"],
-                    client_filled_qty=order_result.get("filled_qty", qty),
-                    client_avg_price=order_result.get("filled_avg_price"),
-                    replication_latency_ms=latency_ms
-                )
-
             if latency_ms > settings.latency_critical_threshold:
                 alert_manager = await get_alert_manager()
                 await alert_manager.alert_latency_threshold_exceeded(
@@ -403,25 +410,15 @@ class OrderExecutor:
 
     async def _post_order_failure_bookkeeping(
         self,
-        audit_log_id: Optional[int],
         error_message: str,
-        latency_ms: int,
         client_account_id: str,
         circuit_breaker_state: str
     ) -> None:
         """
-        Background task: DB audit update + circuit breaker persistence + alert.
-        Runs after a failed order, off the hot path.
+        Background task: circuit breaker persistence + alert.
+        DB audit update is handled inline in _execute_single_order.
         """
         try:
-            if audit_log_id is not None:
-                await self.key_store.update_trade_result(
-                    audit_log_id=audit_log_id,
-                    status="failed",
-                    error_message=error_message,
-                    replication_latency_ms=latency_ms
-                )
-
             if circuit_breaker_state == "open":
                 await self.key_store.update_circuit_breaker(
                     client_account_id,
