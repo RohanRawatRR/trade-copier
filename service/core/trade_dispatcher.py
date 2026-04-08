@@ -9,6 +9,7 @@ Responsibilities:
 - Trigger parallel order execution
 """
 import asyncio
+import time
 from typing import Dict, Any
 import structlog
 
@@ -89,22 +90,25 @@ class TradeDispatcher:
                 master_order_id=master_order_id,
                 symbol=symbol
             )
-            
-            # Get current price for scaling calculations
-            current_price = await self.scaling_engine.get_current_price(symbol)
-            if not current_price:
-                current_price = price  # Fallback to fill price
+
+            # Use the fill price from the WebSocket event directly.
+            # Avoids a sequential get_current_price() API call (~500ms-2s) that
+            # creates a new StockHistoricalDataClient (new HTTP session + TLS) on
+            # every trade. The fill price is equally valid for notional value
+            # checks, buying power validation, and logging.
+            current_price = price
 
             # Pre-fetch master position ONCE and share across all client calculations.
-            # Without this, every calculate_client_quantity() call makes its own
-            # get_open_position() API call — 120 identical calls for 120 clients.
+            t0 = time.perf_counter()
             master_remaining = await self.scaling_engine.get_master_position(symbol)
+            master_position_ms = int((time.perf_counter() - t0) * 1000)
 
-            logger.debug(
+            logger.info(
                 "master_position_prefetched",
                 symbol=symbol,
                 master_remaining=master_remaining,
-                client_count=len(clients)
+                client_count=len(clients),
+                duration_ms=master_position_ms
             )
 
             # Calculate scaled quantities for ALL clients in parallel
@@ -119,9 +123,18 @@ class TradeDispatcher:
                 )
                 for client in clients
             ]
-            
-            # Execute all scaling calculations simultaneously!
+
+            t1 = time.perf_counter()
             scaled_quantities = await asyncio.gather(*scaling_tasks, return_exceptions=True)
+            scaling_phase_ms = int((time.perf_counter() - t1) * 1000)
+
+            logger.info(
+                "scaling_phase_completed",
+                symbol=symbol,
+                master_order_id=master_order_id,
+                client_count=len(clients),
+                duration_ms=scaling_phase_ms
+            )
             
             # Build client orders from results
             client_orders = []
@@ -171,6 +184,7 @@ class TradeDispatcher:
             )
             
             # Execute orders in parallel
+            t2 = time.perf_counter()
             success_count, failure_count = await self.order_executor.execute_orders_batch(
                 master_order_id=master_order_id,
                 symbol=symbol,
@@ -181,14 +195,21 @@ class TradeDispatcher:
                 master_trade_time=timestamp,
                 client_orders=client_orders
             )
-            
+            execution_phase_ms = int((time.perf_counter() - t2) * 1000)
+
             logger.info(
                 "trade_dispatch_completed",
                 master_order_id=master_order_id,
                 symbol=symbol,
                 total_clients=len(client_orders),
                 success_count=success_count,
-                failure_count=failure_count
+                failure_count=failure_count,
+                timing_breakdown_ms={
+                    "master_position_fetch": master_position_ms,
+                    "scaling_phase": scaling_phase_ms,
+                    "execution_phase": execution_phase_ms,
+                    "total": master_position_ms + scaling_phase_ms + execution_phase_ms,
+                }
             )
         
         except Exception as e:

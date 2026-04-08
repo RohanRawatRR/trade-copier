@@ -13,6 +13,7 @@ Ensures:
 - Account buying power validation
 """
 import asyncio
+import time
 from typing import Dict, Optional
 from decimal import Decimal, ROUND_DOWN
 import structlog
@@ -51,6 +52,10 @@ class ScalingEngine:
         # that never changes, so no TTL needed — resets on service restart.
         # Eliminates 120 get_asset() API calls per trade down to 0 after warmup.
         self._fractional_support_cache: Dict[str, bool] = {}
+        # Lock to prevent thundering herd on master equity refresh.
+        # Without this, all 96 client coroutines find the cache stale simultaneously
+        # and fire 96 identical get_account(master) API calls.
+        self._equity_refresh_lock = asyncio.Lock()
     
     async def initialize(self):
         """Initialize master account client"""
@@ -95,28 +100,41 @@ class ScalingEngine:
     async def _refresh_master_equity(self):
         """Refresh cached master account equity"""
         import time
-        
-        # Check if cache is still valid
+
+        # Fast path: cache is still valid, no lock needed
         if self._cache_timestamp:
             elapsed = time.time() - self._cache_timestamp
             if elapsed < self._cache_ttl_seconds:
                 return
-        
-        try:
-            # Run in thread pool to avoid blocking
-            account = await asyncio.to_thread(self.master_client.get_account)
-            self.master_equity = float(account.equity)
-            self._cache_timestamp = time.time()
-            
-            logger.debug(
-                "master_equity_refreshed",
-                equity=self.master_equity,
-                cash=float(account.cash),
-                buying_power=float(account.buying_power)
-            )
-        except Exception as e:
-            logger.error("failed_to_refresh_master_equity", error=str(e))
-            # Keep using stale cache if refresh fails
+
+        # Only ONE coroutine should refresh at a time. Without this lock all 96
+        # client coroutines find the cache stale simultaneously and each fires an
+        # identical get_account(master) call — 95 of them are wasted API calls.
+        async with self._equity_refresh_lock:
+            # Double-check after acquiring the lock: another coroutine may have
+            # already refreshed while we were waiting.
+            if self._cache_timestamp:
+                elapsed = time.time() - self._cache_timestamp
+                if elapsed < self._cache_ttl_seconds:
+                    return
+
+            try:
+                _t = time.perf_counter()
+                account = await asyncio.to_thread(self.master_client.get_account)
+                _dur = int((time.perf_counter() - _t) * 1000)
+                self.master_equity = float(account.equity)
+                self._cache_timestamp = time.time()
+
+                logger.info(
+                    "master_equity_refreshed",
+                    equity=self.master_equity,
+                    cash=float(account.cash),
+                    buying_power=float(account.buying_power),
+                    duration_ms=_dur
+                )
+            except Exception as e:
+                logger.error("failed_to_refresh_master_equity", error=str(e))
+                # Keep using stale cache if refresh fails
     
     async def calculate_client_quantity(
         self,
@@ -155,10 +173,19 @@ class ScalingEngine:
             # Fetch account info and current position in parallel — both are
             # independent reads, no reason to wait for one before firing the other.
             # Saves one full sequential API round-trip (~300-500ms) per client.
+            _t_account = time.perf_counter()
             account_result, pos_result = await asyncio.gather(
                 asyncio.to_thread(client.get_account),
                 asyncio.to_thread(client.get_open_position, symbol),
                 return_exceptions=True
+            )
+            logger.debug(
+                "client_account_fetch_completed",
+                client_account_id=client_account["account_id"],
+                symbol=symbol,
+                duration_ms=int((time.perf_counter() - _t_account) * 1000),
+                get_account_ok=not isinstance(account_result, Exception),
+                get_position_ok=not isinstance(pos_result, Exception),
             )
 
             if isinstance(account_result, Exception):

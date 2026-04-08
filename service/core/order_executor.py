@@ -269,6 +269,7 @@ class OrderExecutor:
             # Fire audit log creation and order submission simultaneously.
             # The DB insert (~5ms) overlaps with the Alpaca API call (~500ms+),
             # removing it entirely from the sequential hot path.
+            _t_submit = time.perf_counter()
             audit_result, order_result = await asyncio.gather(
                 self.key_store.log_trade_attempt(
                     master_order_id=master_order_id,
@@ -293,6 +294,7 @@ class OrderExecutor:
                 ),
                 return_exceptions=True
             )
+            submit_ms = int((time.perf_counter() - _t_submit) * 1000)
 
             # Extract audit_log_id first (needed in both success and failure paths)
             if isinstance(audit_result, Exception):
@@ -317,6 +319,7 @@ class OrderExecutor:
 
             # Update audit record inline — fast UPDATE (~5ms), critical for
             # Trade History showing correct status (not stuck as "pending").
+            _t_db = time.perf_counter()
             if audit_log_id is not None:
                 try:
                     await self.key_store.update_trade_result(
@@ -329,6 +332,16 @@ class OrderExecutor:
                     )
                 except Exception as db_err:
                     logger.error("update_trade_result_failed", error=str(db_err))
+            db_update_ms = int((time.perf_counter() - _t_db) * 1000)
+
+            logger.debug(
+                "order_timing_breakdown",
+                client_account_id=client_account_id,
+                symbol=symbol,
+                submit_ms=submit_ms,
+                db_update_ms=db_update_ms,
+                total_ms=latency_ms,
+            )
 
             # Non-critical work (metrics + latency alert) runs in background.
             asyncio.create_task(self._post_order_bookkeeping(
