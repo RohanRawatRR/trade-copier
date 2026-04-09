@@ -177,40 +177,58 @@ class OrderExecutor:
     
     async def _execute_with_batching(self, tasks: List) -> List[Dict]:
         """
-        Execute ALL tasks in parallel simultaneously.
-        
+        Execute tasks in parallel batches to avoid overwhelming Alpaca's API.
+
         Design:
-        - ALL clients execute in parallel at once (asyncio.gather)
-        - No batching, no artificial delays
-        - Concurrency controlled by MAX_CONCURRENT_ORDERS (semaphore at global level)
-        - Maximum speed, minimum latency
-        
+        - Split clients into batches of `order_batch_size` (default 25)
+        - Each batch executes fully in parallel (asyncio.gather)
+        - Small delay between batches (`rate_limit_delay`) to avoid IP throttling
+        - Prevents Alpaca from queuing 100 simultaneous connections from one IP,
+          which was causing 7-8s tail latency with 100 clients
+
         Args:
             tasks: List of coroutines to execute
-        
+
         Returns:
             List of results
         """
         execution_start = time.perf_counter()
-        
+        batch_size = settings.order_batch_size
+        delay = settings.rate_limit_delay
+
         logger.info(
-            "starting_parallel_execution",
+            "starting_batched_execution",
             total_clients=len(tasks),
-            note="All clients will execute simultaneously"
+            batch_size=batch_size,
+            delay_between_batches_s=delay
         )
-        
-        # Execute ALL tasks in parallel - TRUE MAXIMUM PARALLELISM!
-        # Every single client submits their order at the same time
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
+        all_results = []
+        for batch_start in range(0, len(tasks), batch_size):
+            batch = tasks[batch_start: batch_start + batch_size]
+            batch_num = batch_start // batch_size + 1
+
+            logger.debug(
+                "executing_batch",
+                batch=batch_num,
+                clients_in_batch=len(batch)
+            )
+
+            batch_results = await asyncio.gather(*batch, return_exceptions=True)
+            all_results.extend(batch_results)
+
+            # Delay between batches only (not after the last one)
+            if batch_start + batch_size < len(tasks):
+                await asyncio.sleep(delay)
+
         execution_time_ms = int((time.perf_counter() - execution_start) * 1000)
-        
+
         # Process results
         processed_results = []
         success_count = 0
         failure_count = 0
-        
-        for result in results:
+
+        for result in all_results:
             if isinstance(result, Exception):
                 logger.error(
                     "parallel_execution_exception",
@@ -225,16 +243,16 @@ class OrderExecutor:
                     success_count += 1
                 else:
                     failure_count += 1
-        
+
         logger.info(
-            "parallel_execution_completed",
+            "batched_execution_completed",
             total_clients=len(tasks),
             execution_time_ms=execution_time_ms,
             success_count=success_count,
             failure_count=failure_count,
-            avg_latency_per_client_ms=execution_time_ms / len(tasks) if tasks else 0
+            batches=max(1, (len(tasks) + batch_size - 1) // batch_size)
         )
-        
+
         return processed_results
     
     async def _execute_single_order(

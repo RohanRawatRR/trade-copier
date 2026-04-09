@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     
     # Performance Settings
     max_concurrent_orders: int = Field(default=500, ge=1, le=1000)
-    order_batch_size: int = Field(default=100, ge=1, le=200)
+    order_batch_size: int = Field(default=25, ge=1, le=200)
     rate_limit_delay: float = Field(default=0.05, ge=0.01, le=1.0)
     websocket_reconnect_delay: int = Field(default=5, ge=1, le=60)
     # Thread pool size for asyncio.to_thread() (blocking Alpaca SDK calls).
