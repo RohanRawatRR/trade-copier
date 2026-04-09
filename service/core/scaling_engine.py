@@ -56,6 +56,13 @@ class ScalingEngine:
         # Without this, all 96 client coroutines find the cache stale simultaneously
         # and fire 96 identical get_account(master) API calls.
         self._equity_refresh_lock = asyncio.Lock()
+        # Cache client account equity/buying_power per account_id.
+        # Client equity changes slowly (seconds-to-minutes timescale), so a 60s
+        # TTL is accurate enough for proportional scaling and eliminates 1 API call
+        # per client per trade during the scaling phase.
+        # Format: {account_id: {"equity": float, "buying_power": float, "ts": float}}
+        self._client_equity_cache: Dict[str, Dict] = {}
+        self._client_equity_cache_ttl: float = 60.0  # seconds
     
     async def initialize(self):
         """Initialize master account client"""
@@ -170,28 +177,62 @@ class ScalingEngine:
                 secret_key=client_account["secret_key"]
             )
             
-            # Fetch account info and current position in parallel — both are
-            # independent reads, no reason to wait for one before firing the other.
-            # Saves one full sequential API round-trip (~300-500ms) per client.
             _t_account = time.perf_counter()
-            account_result, pos_result = await asyncio.gather(
-                asyncio.to_thread(client.get_account),
-                asyncio.to_thread(client.get_open_position, symbol),
-                return_exceptions=True
-            )
-            logger.debug(
-                "client_account_fetch_completed",
-                client_account_id=client_account["account_id"],
-                symbol=symbol,
-                duration_ms=int((time.perf_counter() - _t_account) * 1000),
-                get_account_ok=not isinstance(account_result, Exception),
-                get_position_ok=not isinstance(pos_result, Exception),
+            account_id = client_account["account_id"]
+
+            # --- Client equity cache ---
+            # get_account() is the slowest call in the scaling phase (~80-500ms
+            # at market open × 100 clients = 8s parallel). Equity changes slowly,
+            # so a 60s cache is accurate enough for proportional scaling and cuts
+            # the scaling phase API calls from 200→100 per trade.
+            equity_hit = self._client_equity_cache.get(account_id)
+            equity_cached = (
+                equity_hit is not None
+                and (time.time() - equity_hit["ts"]) < self._client_equity_cache_ttl
             )
 
-            if isinstance(account_result, Exception):
-                raise account_result
-            client_equity = float(account_result.equity)
-            client_buying_power = float(account_result.buying_power)
+            if equity_cached:
+                client_equity = equity_hit["equity"]
+                client_buying_power = equity_hit["buying_power"]
+                # Only fetch position (always fresh — needed for exit/direction logic)
+                pos_result = await asyncio.to_thread(client.get_open_position, symbol)
+                logger.debug(
+                    "client_account_fetch_completed",
+                    client_account_id=account_id,
+                    symbol=symbol,
+                    duration_ms=int((time.perf_counter() - _t_account) * 1000),
+                    equity_source="cache",
+                    get_position_ok=not isinstance(pos_result, Exception),
+                )
+            else:
+                # Cache miss: fetch account + position in parallel
+                account_result, pos_result = await asyncio.gather(
+                    asyncio.to_thread(client.get_account),
+                    asyncio.to_thread(client.get_open_position, symbol),
+                    return_exceptions=True
+                )
+                dur_ms = int((time.perf_counter() - _t_account) * 1000)
+
+                if isinstance(account_result, Exception):
+                    raise account_result
+                client_equity = float(account_result.equity)
+                client_buying_power = float(account_result.buying_power)
+
+                # Populate equity cache
+                self._client_equity_cache[account_id] = {
+                    "equity": client_equity,
+                    "buying_power": client_buying_power,
+                    "ts": time.time(),
+                }
+                logger.debug(
+                    "client_account_fetch_completed",
+                    client_account_id=account_id,
+                    symbol=symbol,
+                    duration_ms=dur_ms,
+                    equity_source="api",
+                    get_account_ok=True,
+                    get_position_ok=not isinstance(pos_result, Exception),
+                )
 
             # Position missing = client has no position in this symbol (normal)
             client_owned_qty = 0.0 if isinstance(pos_result, Exception) else float(pos_result.qty)
